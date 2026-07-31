@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Toss</title>
+<link rel="stylesheet" href="/app.css">
+<script src="/app.js" defer></script>
+</head>
+<body>
+
+<!--
+  M0 markup. Semantic and unstyled on purpose.
+
+  Every hook the JS uses is a data-* attribute; every hook the CSS uses is a
+  class. They do not overlap. app.css is replaceable wholesale (M4) and doing
+  so must require zero changes to app.js -- if you find yourself reaching for a
+  class name in the JS, add a data attribute instead.
+-->
+
+<!--
+  The physical edge treatment. feTurbulence generates noise, feDisplacementMap
+  pushes the edges of whatever it is applied to around by it. Applied only to
+  the paper LAYER, never to an element containing text -- displacing glyphs
+  makes them wobble and hurts legibility.
+-->
+<svg class="filters" aria-hidden="true" focusable="false" width="0" height="0">
+  <filter id="rough-edge">
+    <feTurbulence type="fractalNoise" baseFrequency="0.04" numOctaves="3" result="noise"/>
+    <feDisplacementMap in="SourceGraphic" in2="noise" scale="3" xChannelSelector="R" yChannelSelector="G"/>
+  </filter>
+</svg>
+
+<div class="app">
+  <main class="board">
+
+    <header class="board-head">
+      <p class="status" data-role="status" data-state="connecting">
+        <span class="status-dot" aria-hidden="true"></span>
+        <span class="status-label" data-role="status-label">Connecting</span>
+      </p>
+      <button type="button" class="action action-pair" data-role="pair">Add device</button>
+    </header>
+
+    <section class="dropzone" data-role="dropzone" aria-labelledby="dropzone-title">
+      <h1 class="dropzone-title" id="dropzone-title">Paste anything here</h1>
+      <p class="dropzone-hint">
+        <kbd class="key">&#8984;</kbd>
+        <span class="key-sep">or</span>
+        <kbd class="key">Ctrl</kbd>
+        <kbd class="key">V</kbd>
+      </p>
+    </section>
+
+    <section class="scraps" aria-label="Tossed items">
+      <ul class="scrap-list" data-role="list"></ul>
+      <p class="scrap-empty" data-role="empty" hidden>Nothing tossed yet.</p>
+      <p class="scrap-foot">
+        <button type="button" class="action action-clear" data-role="clear" hidden>Clear all scraps</button>
+      </p>
+    </section>
+
+  </main>
+
+  <!--
+    Native <dialog> rather than a hand-rolled overlay: showModal() brings the
+    focus trap, Escape-to-close, inertness of the page behind it and the
+    ::backdrop pseudo-element with it, none of which needs a framework.
+  -->
+  <dialog class="sheet" data-role="pair-sheet" aria-labelledby="pair-title">
+    <div class="sheet-body">
+      <h2 class="sheet-title" id="pair-title">Pairing</h2>
+      <button type="button" class="action sheet-close" data-role="pair-close">Close</button>
+
+      <section class="pair-show">
+        <img class="pair-qr" data-role="pair-qr" alt="QR code linking to this room" width="192" height="192">
+        <p class="pair-or">Or enter code</p>
+        <p class="pair-code" data-role="pair-code">&mdash;</p>
+        <p class="pair-warning">
+          Anyone with this code can see what you paste here.
+          Expires in <span data-role="pair-countdown">5 minutes</span>.
+        </p>
+      </section>
+
+      <!--
+        The receiving half. The supplied design only draws the sheet that SHOWS
+        a code, so this section has no design yet -- see the note in CLAUDE.md.
+      -->
+      <section class="pair-join">
+        <form data-role="pair-join-form">
+          <label class="pair-join-label" for="pair-join-input">Have a code from another device?</label>
+          <input class="pair-join-input" id="pair-join-input" data-role="pair-join-input"
+                 type="text" inputmode="latin" autocapitalize="characters"
+                 autocomplete="off" spellcheck="false" placeholder="K3N8-XQ2M" maxlength="9">
+          <button type="submit" class="action pair-join-submit">Join</button>
+        </form>
+        <p class="pair-join-error" data-role="pair-join-error" role="alert"></p>
+      </section>
+    </div>
+  </dialog>
+
+  <!-- Arrivals are announced here. Never the content -- just that one landed. -->
+  <p class="live-region" data-role="live" role="status" aria-live="polite"></p>
+</div>
+
+<template data-role="scrap-template">
+  <li class="scrap" data-role="scrap" tabindex="-1">
+    <article class="scrap-paper">
+      <p class="scrap-meta">
+        <span class="scrap-origin" data-role="origin"></span>
+        <span class="scrap-age" data-role="age"></span>
+      </p>
+      <div class="scrap-payload">
+        <pre class="scrap-content" data-role="content"></pre>
+      </div>
+      <p class="scrap-controls">
+        <!-- Shown only when the scrap carries data-long; see app.js. -->
+        <button type="button" class="action scrap-expand" data-role="expand" hidden>Show all</button>
+        <span class="scrap-actions">
+          <button type="button" class="action scrap-copy" data-role="copy">Copy</button>
+          <button type="button" class="action scrap-delete" data-role="delete">Throw</button>
+        </span>
+      </p>
+      <span class="scrap-stamp" data-role="stamp" aria-hidden="true">Copied</span>
+    </article>
+  </li>
+</template>
+
+</body>
+</html>
