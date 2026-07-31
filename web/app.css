@@ -1,0 +1,773 @@
+/*
+  Toss -- the supplied design, applied.
+
+  Concept: scraps of cheap pulp paper on a desk. Items are physical objects that
+  visibly age over their 24h life -- crisp and well-shadowed when Fresh, flatter
+  and duller when Fading, foxed and curling when Dying.
+
+  Translated from the Figma Make file (React + Tailwind + framer-motion). No JS
+  was changed to apply this: every state below is an attribute app.js already
+  sets. Hooks available:
+
+    [data-role="status"][data-state="connecting|live|offline"]
+    [data-role="scrap"][data-age="fresh|fading|dying"]
+    [data-role="scrap"][data-pending]        optimistic, unacknowledged
+    [data-role="scrap"][data-copied]         2s after a successful copy
+    [data-role="scrap"][data-failed]         send failed
+    [data-role="scrap"][data-long/expanded]  collapsed / opened
+    style="--rotation: -0.4deg"              seeded from the ULID
+*/
+
+/* ---------- fonts ---------- */
+
+/*
+  Self-hosted: the CSP forbids external hosts, and a font request to Google is
+  a third party learning who reads this page.
+
+  Instrument Sans is OFL (see fonts/OFL-InstrumentSans.txt) and ships here. One
+  variable file covers 400-700.
+*/
+@font-face {
+  font-family: 'Instrument Sans';
+  src: url('/fonts/instrument-sans-var.woff2') format('woff2');
+  font-weight: 400 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+/*
+  Redaction and Commit Mono are NOT bundled -- see CLAUDE.md. Drop the woff2s
+  into web/fonts/ and uncomment; the stacks below degrade sensibly until then.
+
+@font-face {
+  font-family: 'Redaction 35';
+  src: url('/fonts/redaction-35.woff2') format('woff2');
+  font-weight: 400; font-display: swap;
+}
+@font-face {
+  font-family: 'Commit Mono';
+  src: url('/fonts/commit-mono-400.woff2') format('woff2');
+  font-weight: 400; font-display: swap;
+}
+*/
+
+/* ---------- tokens ---------- */
+
+:root {
+  /* Cheap pulp, lit from above. */
+  --desk: #ebeae4;
+  --scrap: #f6f5f1;
+  --graphite: #22242a;
+  --pencil: #6e7178;
+  --stamp: #2f6f63;
+  --foxing: #b9a88c;
+
+  --font-display: 'Redaction 35', 'Redaction', 'Iowan Old Style', Palatino, Georgia, serif;
+  --font-ui: 'Instrument Sans', ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-mono: 'Commit Mono', ui-monospace, SFMono-Regular, 'Cascadia Mono', Consolas, monospace;
+
+  /* Ink sits into the paper rather than on top of it. Meaningless on a dark
+     ground, so it is switched off below. */
+  --ink-blend: multiply;
+
+  --shadow-fresh: 0 1px 2px rgb(0 0 0 / 0.12), 0 8px 24px rgb(0 0 0 / 0.06);
+  --shadow-fading: 0 1px 2px rgb(0 0 0 / 0.08), 0 4px 12px rgb(0 0 0 / 0.03);
+  --shadow-dying: 0 1px 1px rgb(0 0 0 / 0.04);
+
+  color-scheme: light dark;
+}
+
+/* The designer had this commented out to preview light mode; the values are
+   theirs. */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --desk: #131416;
+    --scrap: #1d1f22;
+    --graphite: #e4e2da;
+    --pencil: #8a8d93;
+    --stamp: #5fa898;
+    --foxing: #7a6e5c;
+
+    --ink-blend: normal;
+
+    --shadow-fresh: 0 1px 2px rgb(0 0 0 / 0.5), 0 8px 24px rgb(0 0 0 / 0.35);
+    --shadow-fading: 0 1px 2px rgb(0 0 0 / 0.35), 0 4px 12px rgb(0 0 0 / 0.2);
+    --shadow-dying: 0 1px 1px rgb(0 0 0 / 0.2);
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+/*
+  The UA rule for [hidden] is display:none at zero specificity, so any author
+  rule setting display on the same element silently unhides it. app.js toggles
+  .hidden on real controls ("Show all", "Clear all scraps", the empty state),
+  so this has to win.
+*/
+[hidden] {
+  display: none !important;
+}
+
+/* ---------- page ---------- */
+
+body {
+  margin: 0;
+  background: var(--desk);
+  color: var(--graphite);
+  font-family: var(--font-ui);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+::selection {
+  background: var(--stamp);
+  color: var(--desk);
+}
+
+.filters {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+}
+
+.app {
+  min-height: 100vh;
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 2rem 1rem;
+}
+
+.board {
+  width: 100%;
+  max-width: 36rem;
+  display: flex;
+  flex-direction: column;
+  gap: 2.5rem;
+}
+
+/* ---------- shared type ---------- */
+
+/* The small-caps voice used for every label and control in this design. */
+.status-label,
+.action,
+.scrap-meta,
+.pair-or,
+.sheet-title,
+.pair-join-label {
+  font-family: var(--font-ui);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+
+.action {
+  background: none;
+  border: 0;
+  padding: 0.25rem 0;
+  margin: 0;
+  color: var(--pencil);
+  font-weight: 500;
+  cursor: pointer;
+  transition: color 0.2s ease;
+}
+
+.action:hover {
+  color: var(--graphite);
+}
+
+.action:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* Never remove this. Arrow keys move between scraps and the focused one has to
+   be findable. */
+:focus-visible {
+  outline: 2px solid var(--stamp);
+  outline-offset: 3px;
+  border-radius: 1px;
+}
+
+/* ---------- header ---------- */
+
+.board-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.status {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 0;
+}
+
+.status-dot {
+  width: 0.75rem;
+  height: 0.75rem;
+  border-radius: 50%;
+  background: var(--pencil);
+  filter: url(#rough-edge);
+  transition: background-color 0.3s ease;
+}
+
+.status[data-state='live'] .status-dot {
+  background: var(--stamp);
+}
+
+.status-label {
+  color: var(--pencil);
+  font-weight: 600;
+}
+
+/* ---------- paste zone ---------- */
+
+.dropzone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 5rem 1.5rem;
+  text-align: center;
+}
+
+.dropzone-title {
+  margin: 0 0 1.5rem;
+  font-family: var(--font-display);
+  font-size: clamp(2.25rem, 7vw, 3rem);
+  font-weight: 400;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+  color: var(--graphite);
+  opacity: 0.9;
+  mix-blend-mode: var(--ink-blend);
+}
+
+.dropzone-hint {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 0;
+  font-size: 0.875rem;
+  color: var(--pencil);
+}
+
+/* Pressed into the desk, not sitting on it. */
+.key {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 2.5rem;
+  padding: 0.375rem 0.75rem;
+  font-family: var(--font-ui);
+  font-size: 0.875rem;
+  font-weight: 500;
+  background: transparent;
+  border: 1px solid rgb(0 0 0 / 0.05);
+  box-shadow:
+    inset 1px 1px 3px rgb(0 0 0 / 0.1),
+    inset -1px -1px 2px rgb(255 255 255 / 0.5);
+}
+
+@media (prefers-color-scheme: dark) {
+  .key {
+    border-color: rgb(255 255 255 / 0.02);
+    box-shadow:
+      inset 1px 1px 4px rgb(0 0 0 / 0.6),
+      inset -1px -1px 2px rgb(255 255 255 / 0.03);
+  }
+}
+
+/* ---------- scraps ---------- */
+
+.scrap-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.scrap {
+  position: relative;
+  margin-bottom: 1.5rem;
+  /* Seeded per item by app.js, so a scrap sits the same way every time. */
+  rotate: var(--rotation, 0deg);
+  transition:
+    opacity 0.3s ease,
+    translate 0.3s cubic-bezier(0.22, 1, 0.36, 1),
+    scale 0.3s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* Dropped onto the desk. @starting-style is what makes this run on an element
+   the JS has only just inserted -- no animation library needed. */
+@starting-style {
+  .scrap {
+    opacity: 0;
+    translate: 0 -20px;
+    scale: 0.98;
+  }
+}
+
+.scrap:last-child {
+  margin-bottom: 0;
+}
+
+.scrap-paper {
+  position: relative;
+  padding: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+/*
+  The paper itself. A separate layer so the displacement filter roughs up the
+  edges without touching the text sitting above it.
+*/
+.scrap-paper::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background: var(--scrap);
+  filter: url(#rough-edge);
+  box-shadow: var(--shadow-fresh);
+  transition:
+    box-shadow 1s ease-in-out,
+    background-color 1s ease-in-out;
+}
+
+/* Pulp grain. */
+.scrap-paper::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  opacity: 0.04;
+  mix-blend-mode: var(--ink-blend);
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+.scrap-paper > * {
+  position: relative;
+  z-index: 2;
+}
+
+/* --- ageing --- */
+
+.scrap[data-age='fading'] .scrap-paper::before {
+  box-shadow: var(--shadow-fading);
+  /* Goes the colour of the desk it has been lying on. */
+  background: var(--desk);
+}
+
+.scrap[data-age='dying'] .scrap-paper::before {
+  box-shadow: var(--shadow-dying);
+}
+
+/* Foxing: the brown staining that creeps in from the edges of old paper. */
+.scrap[data-age='dying']::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+  opacity: 0.6;
+  box-shadow: inset 0 0 50px var(--foxing);
+  filter: url(#rough-edge);
+}
+
+/* The corner lifting off the desk. */
+.scrap[data-age='dying']::after {
+  content: '';
+  position: absolute;
+  right: -1px;
+  bottom: -1px;
+  z-index: 4;
+  width: 0;
+  height: 0;
+  border-top: 24px solid var(--scrap);
+  border-right: 24px solid transparent;
+  filter: drop-shadow(-2px 2px 4px rgb(0 0 0 / 0.1));
+  opacity: 0.8;
+}
+
+.scrap-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin: 0;
+  font-size: 0.625rem;
+  color: var(--pencil);
+}
+
+.scrap-payload {
+  position: relative;
+}
+
+.scrap-content {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 0.875rem;
+  line-height: 1.65;
+  color: var(--graphite);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  mix-blend-mode: var(--ink-blend);
+}
+
+/* Long content is clipped and faded rather than cut. */
+.scrap[data-long]:not([data-expanded]) .scrap-payload {
+  max-height: 6rem;
+  overflow: hidden;
+}
+
+.scrap[data-long]:not([data-expanded]) .scrap-payload::after {
+  content: '';
+  position: absolute;
+  inset: auto 0 0 0;
+  height: 3rem;
+  pointer-events: none;
+  background: linear-gradient(to top, var(--scrap), transparent);
+}
+
+.scrap[data-age='fading'][data-long]:not([data-expanded]) .scrap-payload::after {
+  background: linear-gradient(to top, var(--desk), transparent);
+}
+
+.scrap-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin: 0.5rem 0 0;
+  padding-top: 1rem;
+  border-top: 1px solid rgb(110 113 120 / 0.15);
+}
+
+/* margin-left:auto keeps Copy/Throw hard right whether or not Show all is
+   beside them. */
+.scrap-controls > .scrap-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 1.25rem;
+}
+
+.scrap-expand {
+  color: var(--stamp);
+}
+
+.scrap-copy:hover {
+  color: var(--stamp);
+}
+
+.scrap-delete:hover {
+  color: var(--foxing);
+}
+
+/* --- the COPIED stamp --- */
+
+.scrap-stamp {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  z-index: 20;
+  translate: -50% -50%;
+  rotate: -15deg;
+  padding: 0.5rem 1rem;
+  font-family: var(--font-ui);
+  font-size: clamp(2rem, 8vw, 3.75rem);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  color: var(--stamp);
+  border: 4px solid var(--stamp);
+  mix-blend-mode: var(--ink-blend);
+  pointer-events: none;
+  opacity: 0;
+  scale: 1.5;
+  transition:
+    opacity 0.2s ease,
+    scale 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+  /* Roughs the ink up so it reads as rubber, not vector. */
+  mask-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.2' numOctaves='3'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.8'/%3E%3C/svg%3E");
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.2' numOctaves='3'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.8'/%3E%3C/svg%3E");
+}
+
+.scrap[data-copied] .scrap-stamp {
+  opacity: 0.9;
+  scale: 1;
+}
+
+/* --- pending / failed --- */
+
+.scrap[data-pending] {
+  opacity: 0.55;
+}
+
+.scrap[data-failed] .scrap-paper::before {
+  box-shadow: 0 0 0 1px var(--foxing);
+}
+
+/* ---------- empty state and footer ---------- */
+
+.scrap-empty {
+  margin: 0;
+  padding: 2rem 0;
+  text-align: center;
+  font-size: 0.875rem;
+  color: var(--pencil);
+  opacity: 0.7;
+}
+
+.scrap-foot {
+  display: flex;
+  justify-content: center;
+  margin: 3rem 0 0;
+}
+
+.scraps {
+  padding-bottom: 5rem;
+}
+
+/* ---------- pairing sheet ---------- */
+
+.sheet {
+  position: fixed;
+  inset: 0;
+  margin: auto;
+  width: calc(100% - 2rem);
+  max-width: 24rem;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  overflow: visible;
+  color: var(--graphite);
+}
+
+.sheet::backdrop {
+  background: color-mix(in srgb, var(--desk) 80%, transparent);
+}
+
+.sheet-body {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1.5rem;
+  padding: 2.5rem 2rem;
+  text-align: center;
+}
+
+/* Same trick as the scraps: rough the paper, leave the code crisp. A pairing
+   code is read aloud and typed by hand -- displacing it would be cruel. */
+.sheet-body::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background: var(--scrap);
+  filter: url(#rough-edge);
+  box-shadow: 0 20px 40px rgb(0 0 0 / 0.1);
+}
+
+.sheet-body > * {
+  position: relative;
+  z-index: 1;
+}
+
+.sheet-title {
+  margin: 0;
+  font-weight: 500;
+  color: var(--pencil);
+}
+
+.sheet-close {
+  position: absolute;
+  top: 1rem;
+  right: 1.25rem;
+}
+
+.pair-show {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1rem;
+}
+
+.pair-qr {
+  width: 12rem;
+  height: 12rem;
+  max-width: 100%;
+  background: var(--desk);
+  border: 2px solid rgb(110 113 120 / 0.2);
+  padding: 0.5rem;
+}
+
+/* The QR is pure black on white; invert it on a dark desk so it still scans. */
+@media (prefers-color-scheme: dark) {
+  .pair-qr {
+    filter: invert(1) hue-rotate(180deg);
+  }
+}
+
+.pair-or {
+  margin: 0;
+  font-size: 0.625rem;
+  color: var(--pencil);
+}
+
+.pair-code {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: clamp(1.5rem, 8vw, 1.875rem);
+  letter-spacing: 0.15em;
+  color: var(--graphite);
+  mix-blend-mode: var(--ink-blend);
+}
+
+.pair-warning {
+  max-width: 16rem;
+  margin: 0;
+  font-size: 0.75rem;
+  line-height: 1.6;
+  color: var(--pencil);
+}
+
+/*
+  The receiving half. The supplied design does not draw this state, so it is
+  built from the same vocabulary: pencil labels, a monospace field, the stamp
+  colour for the affirmative action.
+*/
+.pair-join {
+  width: 100%;
+  padding-top: 1.5rem;
+  border-top: 1px solid rgb(110 113 120 / 0.15);
+}
+
+.pair-join-label {
+  display: block;
+  margin-bottom: 0.75rem;
+  color: var(--pencil);
+}
+
+.pair-join-input {
+  width: 100%;
+  padding: 0.75rem;
+  font-family: var(--font-mono);
+  font-size: 1.125rem;
+  text-align: center;
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+  color: var(--graphite);
+  background: var(--desk);
+  border: 1px solid rgb(110 113 120 / 0.25);
+  border-radius: 0;
+}
+
+.pair-join-input::placeholder {
+  color: var(--pencil);
+  opacity: 0.5;
+}
+
+.pair-join-input:focus-visible {
+  outline: 2px solid var(--stamp);
+  outline-offset: 1px;
+}
+
+.pair-join-submit {
+  margin-top: 0.75rem;
+  color: var(--stamp);
+  font-weight: 600;
+}
+
+.pair-join-error {
+  margin: 0.75rem 0 0;
+  font-size: 0.75rem;
+  color: var(--foxing);
+}
+
+.pair-join-error:empty {
+  display: none;
+}
+
+/* ---------- phones ---------- */
+
+@media (max-width: 30rem) {
+  .app {
+    padding: 1.5rem 0.75rem;
+  }
+
+  .board {
+    gap: 2rem;
+  }
+
+  .dropzone {
+    padding: 3rem 0.5rem;
+  }
+
+  /* A physical keyboard is the exception on a phone; the gesture still works. */
+  .dropzone-hint {
+    display: none;
+  }
+
+  .scrap-paper {
+    padding: 1.25rem;
+  }
+
+  .scrap-meta {
+    font-size: 0.5625rem;
+  }
+
+  /* Comfortable tap targets, per WCAG 2.5.8. */
+  .action {
+    padding: 0.625rem 0;
+    min-height: 44px;
+    display: inline-flex;
+    align-items: center;
+  }
+
+  .sheet-body {
+    padding: 2rem 1.25rem;
+  }
+}
+
+/* ---------- reduced motion ---------- */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  /* Paper that never moved does not need to be straightened, but a stamp that
+     cannot animate should at least not arrive mid-scale. */
+  .scrap-stamp {
+    scale: 1;
+  }
+}
+
+/* ---------- screen reader only ---------- */
+
+.live-region {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
