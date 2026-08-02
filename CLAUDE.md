@@ -39,7 +39,19 @@ either file, which between them are the QR and the whole of the encryption.
 
 ## The one thing that will silently break this
 
-**Exactly one process.** All state is in memory and there is no cross-process
+**Exactly one process.** This has already bitten once in production: `fly
+deploy` creates **two** machines by default, `min_machines_running = 1` is a
+floor rather than a ceiling and does not prevent it, and the result was pastes
+that silently never crossed between devices. Deploy with `--ha=false`.
+
+To check from outside, hit `/healthz` a few times. A single process's room
+count can only go up, so if it alternates there is more than one machine:
+
+```sh
+for i in $(seq 6); do curl -s https://<app>/healthz; echo; done
+```
+
+All state is in memory and there is no cross-process
 fan-out. Two instances behind a load balancer means a POST landing on A while
 the recipient's stream is held by B goes nowhere — no error, no log, a 201 to
 the sender. Don't add replicas, don't autoscale. Scaling out is a shared bus

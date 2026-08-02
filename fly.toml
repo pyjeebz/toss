@@ -7,8 +7,20 @@
 # header of the Dockerfile.
 #
 #   fly apps create toss-pyjeebz     once
-#   fly deploy
+#   fly deploy --ha=false            EVERY time -- see below
 #   fly scale count 1                and never more than 1
+#
+# --ha=false is not optional. `fly deploy` creates TWO machines by default for
+# high availability, and min_machines_running below is a floor, not a ceiling,
+# so it does not prevent that. This already happened once: the proxy
+# round-robined between the two, a room created on one 404'd on the other, and
+# sends landed on a machine that was not holding the recipient's stream. From
+# outside it looked like "the sync is flaky".
+#
+# To check at any time -- a single process's room count can only go up, so if
+# this alternates, there is more than one machine:
+#
+#   for i in $(seq 6); do curl -s https://<app>.fly.dev/healthz; echo; done
 #
 # Use `fly apps create`, NOT `fly launch`. Launch regenerates this file from its
 # own template and will throw away every comment in it, including the ones
@@ -23,7 +35,7 @@ app = "toss-pyjeebz"
 # One machine means one location, and every send is a round trip to it. Pick the
 # region you are actually in -- `fly platform regions` lists them. This is the
 # single biggest lever on how fast the app feels.
-primary_region = "lhr"
+primary_region = "yyz"
 
 [build]
   dockerfile = "Dockerfile"
