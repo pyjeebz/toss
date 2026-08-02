@@ -6,14 +6,23 @@
 # the room in half and silently drops what crosses between the two. See the
 # header of the Dockerfile.
 #
-#   fly launch --no-deploy      once, to create the app
+#   fly apps create toss-pyjeebz     once
 #   fly deploy
-#   fly scale count 1           and never more than 1
+#   fly scale count 1                and never more than 1
+#
+# Use `fly apps create`, NOT `fly launch`. Launch regenerates this file from its
+# own template and will throw away every comment in it, including the ones
+# explaining why the machine count is pinned.
 #
 # Fly terminates TLS for you, which is not a nicety: WebCrypto is only exposed
 # in a secure context, so over plain HTTP the app refuses to start.
 
-app = "toss"
+# Must be globally unique across Fly. Change it if this one is taken.
+app = "toss-pyjeebz"
+
+# One machine means one location, and every send is a round trip to it. Pick the
+# region you are actually in -- `fly platform regions` lists them. This is the
+# single biggest lever on how fast the app feels.
 primary_region = "lhr"
 
 [build]
