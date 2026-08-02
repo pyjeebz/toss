@@ -36,14 +36,36 @@
 }
 
 /*
-  Redaction and Commit Mono are NOT bundled -- see CLAUDE.md. Drop the woff2s
-  into web/fonts/ and uncomment; the stacks below degrade sensibly until then.
+  Redaction is the display face -- the "Paste anything here" headline, and the
+  only thing --font-display is on. Dual licensed OFL 1.1 / LGPL 2.1, see
+  fonts/OFL-Redaction.txt.
 
+  Taken from the official package at redaction.us, which ships webfonts and the
+  licence together. NOT from the fonts.cdnfonts.com mirror the Figma file
+  @imports -- that one carries no licence file, which is why this sat unbundled.
+
+  "35" is a halftone grade, not a weight: the cut is screened at 35 lpi, so the
+  glyphs read as a document degraded by being photocopied through the legal
+  process. That is the point of the typeface, and it is why the headline cannot
+  fall back to a plain serif and still mean the same thing.
+
+  Regular only. The design sets the headline at 400 and nothing else uses the
+  face; Bold and Italic are in the same package if that ever changes.
+*/
 @font-face {
   font-family: 'Redaction 35';
   src: url('/fonts/redaction-35.woff2') format('woff2');
-  font-weight: 400; font-display: swap;
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
 }
+
+/*
+  Commit Mono is still NOT bundled -- licence unverified from here. It is also
+  not on Google Fonts, so the Figma file's @import for it silently 404s and the
+  design was previewed with ui-monospace throughout. Drop the woff2 into
+  web/fonts/ and uncomment; --font-mono degrades sensibly until then.
+
 @font-face {
   font-family: 'Commit Mono';
   src: url('/fonts/commit-mono-400.woff2') format('woff2');
@@ -248,6 +270,58 @@ body {
   color: var(--graphite);
   opacity: 0.9;
   mix-blend-mode: var(--ink-blend);
+}
+
+/*
+  The compose field. Marked out on the desk with a dashed rule rather than
+  raised like a form control -- it is an area you drop something into, not a
+  widget.
+*/
+.compose {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75rem;
+  width: min(34rem, 100%);
+  margin-bottom: 1.75rem;
+}
+
+.compose-field {
+  width: 100%;
+  min-height: 3.25rem;
+  max-height: 12rem;
+  padding: 0.875rem 1rem;
+  font-family: var(--font-mono);
+  /*
+    16px is a floor, not a preference: iOS Safari zooms the whole page when a
+    field smaller than that takes focus, and it does not zoom back out.
+  */
+  font-size: 1rem;
+  line-height: 1.5;
+  text-align: center;
+  color: var(--graphite);
+  background: transparent;
+  border: 1px dashed rgb(110 113 120 / 0.35);
+  border-radius: 0;
+  resize: none;
+  overflow-y: auto;
+  mix-blend-mode: var(--ink-blend);
+}
+
+.compose-field::placeholder {
+  color: var(--pencil);
+  opacity: 0.6;
+}
+
+.compose-field:focus-visible {
+  outline: 2px solid var(--stamp);
+  outline-offset: 2px;
+  border-style: solid;
+}
+
+.compose-send {
+  color: var(--stamp);
+  font-weight: 600;
 }
 
 .dropzone-hint {
@@ -515,6 +589,23 @@ body {
 
 .scrap[data-failed] .scrap-paper::before {
   box-shadow: 0 0 0 1px var(--foxing);
+}
+
+/*
+  Arrived, but sealed under a key this device does not hold. Set in the same
+  voice as the rest of the chrome rather than as an error: it is usually not a
+  fault, just a scrap from before this device was paired.
+*/
+.scrap[data-undecryptable] .scrap-content {
+  font-family: var(--font-ui);
+  font-size: 0.75rem;
+  font-style: italic;
+  color: var(--pencil);
+}
+
+.scrap[data-undecryptable] .scrap-copy {
+  opacity: 0.4;
+  pointer-events: none;
 }
 
 /* ---------- empty state and footer ---------- */

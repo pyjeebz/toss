@@ -3,10 +3,19 @@ package api
 import (
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
+)
+
+var (
+	// errCodeTaken means the client picked a code already in use. It picks
+	// another; at 40 bits this effectively never happens twice.
+	errCodeTaken = errors.New("pairing code already in use")
+
+	errBadCode = errors.New("pairing code is not well formed")
 )
 
 const (
@@ -42,8 +51,12 @@ func newPairStore() *pairStore {
 	return &pairStore{codes: make(map[string]pairing)}
 }
 
-// mint issues a code for a room. Collisions are retried rather than tolerated.
-func (p *pairStore) mint(room, payload string) (string, time.Time, error) {
+// mint issues a server-chosen code for a room. Collisions are retried rather
+// than tolerated.
+//
+// Only for pairings with no payload. A server-chosen code cannot be used to
+// wrap key material -- see claim.
+func (p *pairStore) mint(room string) (string, time.Time, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.sweepLocked()
@@ -57,10 +70,51 @@ func (p *pairStore) mint(room, payload string) (string, time.Time, error) {
 		if _, taken := p.codes[code]; taken {
 			continue
 		}
-		p.codes[code] = pairing{room: room, payload: payload, expiresAt: expires}
+		p.codes[code] = pairing{room: room, expiresAt: expires}
 		return code, expires, nil
 	}
 	return "", time.Time{}, errNoCode
+}
+
+// claim registers a code the client chose, along with the payload wrapped under
+// it. The client has to be the one choosing: the payload is the room key sealed
+// with a secret derived from the code, so a server that picked the code would
+// hold both halves and could open the payload it is storing. Handing selection
+// to the browser is what keeps the typed-pairing path end-to-end encrypted.
+//
+// The code is still a 40-bit secret drawn from crypto.getRandomValues; what
+// changes is only who draws it. A client that draws badly weakens its own room
+// and nobody else's.
+func (p *pairStore) claim(code, room, payload string) (time.Time, error) {
+	if !validPairCode(code) {
+		return time.Time{}, errBadCode
+	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.sweepLocked()
+
+	if _, taken := p.codes[code]; taken {
+		return time.Time{}, errCodeTaken
+	}
+	expires := time.Now().Add(pairTTL)
+	p.codes[code] = pairing{room: room, payload: payload, expiresAt: expires}
+	return expires, nil
+}
+
+// validPairCode requires the canonical form: exact length, and every character
+// already in the alphabet. Normalisation is for what a person types, not for
+// what a client submits.
+func validPairCode(code string) bool {
+	if len(code) != pairCodeLen {
+		return false
+	}
+	for _, r := range code {
+		if !strings.ContainsRune(pairAlphabet, r) {
+			return false
+		}
+	}
+	return true
 }
 
 // redeem consumes a code. Single redemption: a code that has been used is gone,
@@ -157,15 +211,19 @@ func formatPairCode(code string) string {
 type mintPairRequest struct {
 	Room string `json:"room"`
 
+	// Code, when set, is the client's own choice of pairing code. Required
+	// whenever Payload is set, and the reason is the whole point of M3: the
+	// payload is sealed under a secret derived from the code, so a
+	// server-chosen code would let the server open the payload it stores.
+	Code string `json:"code,omitempty"`
+
 	// Payload is opaque and passed straight back on redemption. The server
 	// neither reads it nor requires it.
 	//
-	// It exists so M3 has somewhere to put the room key wrapped under a secret
-	// derived from the code itself: device A wraps, the server stores
-	// ciphertext, device B derives the same secret from what the person typed
-	// and unwraps locally. That keeps the typed-code path working under E2EE
-	// without the server ever holding key material -- and without needing a
-	// server change to get there.
+	// It carries the room key wrapped under a secret derived from Code: device
+	// A wraps, the server stores ciphertext, device B derives the same secret
+	// from what the person typed and unwraps locally. That keeps the typed-code
+	// path working under E2EE without the server ever holding key material.
 	Payload string `json:"payload,omitempty"`
 }
 
@@ -179,9 +237,34 @@ func (s *Server) mintPair(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "no such room")
 		return
 	}
+	// Refusing this combination is what makes the footgun unrepresentable: a
+	// payload sealed under a code the server chose is a payload the server can
+	// open, and it would look identical from the outside.
+	if req.Payload != "" && req.Code == "" {
+		writeErr(w, http.StatusBadRequest, "a payload requires a client-supplied code")
+		return
+	}
 
-	code, expires, err := s.pairs.mint(req.Room, req.Payload)
-	if err != nil {
+	var (
+		code    = req.Code
+		expires time.Time
+		err     error
+	)
+	if code != "" {
+		expires, err = s.pairs.claim(code, req.Room, req.Payload)
+	} else {
+		code, expires, err = s.pairs.mint(req.Room)
+	}
+	switch {
+	case errors.Is(err, errBadCode):
+		writeErr(w, http.StatusBadRequest, "malformed code")
+		return
+	case errors.Is(err, errCodeTaken):
+		// The client picks another and retries. At 40 bits this is vanishingly
+		// rare, and it is cheaper than making the server guess what was meant.
+		writeErr(w, http.StatusConflict, "that code is in use")
+		return
+	case err != nil:
 		s.Log.Error("mint pairing code", "err", err)
 		writeErr(w, http.StatusInternalServerError, "could not mint code")
 		return

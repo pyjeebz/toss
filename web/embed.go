@@ -7,7 +7,7 @@ import (
 	"io/fs"
 )
 
-//go:embed index.html app.js app.css fonts
+//go:embed index.html app.js qr.js crypto.js app.css fonts
 var files embed.FS
 
 // FS is the static asset tree.

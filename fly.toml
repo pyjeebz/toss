@@ -1,0 +1,58 @@
+# Fly.io deployment.
+#
+# The settings that matter here are the ones holding this to ONE machine. Every
+# room, item and subscriber lives in the process's memory and there is no
+# cross-process fan-out, so a second machine does not add capacity -- it splits
+# the room in half and silently drops what crosses between the two. See the
+# header of the Dockerfile.
+#
+#   fly launch --no-deploy      once, to create the app
+#   fly deploy
+#   fly scale count 1           and never more than 1
+#
+# Fly terminates TLS for you, which is not a nicety: WebCrypto is only exposed
+# in a secure context, so over plain HTTP the app refuses to start.
+
+app = "toss"
+primary_region = "lhr"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  TOSS_ADDR = ":8080"
+  # Fly's proxy sets X-Forwarded-For, and it is the hop we want for per-IP
+  # limits. Only correct because there is a proxy in front; never set this on a
+  # directly-exposed process.
+  TOSS_TRUST_PROXY = "1"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+
+  # Both false on purpose. A stopped machine loses every room in memory, and
+  # every open tab then discovers its room is gone at once -- the restart
+  # stampede described in CLAUDE.md. Idle SSE subscribers also do not look like
+  # traffic to an autostop heuristic, so a room full of waiting phones is
+  # exactly what would get shut down.
+  auto_stop_machines = false
+  auto_start_machines = false
+
+  min_machines_running = 1
+
+  # Not a typo, and not a placeholder to raise later. See the comment at the top.
+  [http_service.concurrency]
+    type = "connections"
+    soft_limit = 200
+    hard_limit = 250
+
+[[http_service.checks]]
+  grace_period = "5s"
+  interval = "30s"
+  method = "GET"
+  path = "/healthz"
+  timeout = "5s"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"

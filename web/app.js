@@ -1,12 +1,14 @@
-// Toss -- M1 client.
+// Toss -- client.
 //
 // Paste to send, EventSource to receive, tap to copy back. Rooms live at
 // /r/<room> and are remembered in localStorage; a short code or a QR scan
 // brings another device into the same room.
 //
-// Content is still plaintext on the wire until M3. The server already treats it
-// as opaque, and /api/pair already carries an opaque payload for the wrapped
-// room key, so M3 lands here and nowhere else.
+// Everything on the wire is AES-GCM ciphertext (M3). The key is generated here,
+// lives in the URL fragment, and is never sent anywhere -- see crypto.js. The
+// consequence for this file is that plaintext exists in exactly two places: the
+// `text` field of a `rendered` entry, and the local variable it was decrypted
+// into. It is never stored, never logged, and never put in an attribute.
 
 (() => {
   'use strict';
@@ -21,6 +23,9 @@
     statusLabel: $('status-label'),
     live: $('live'),
     template: $('scrap-template'),
+    compose: $('compose'),
+    composeForm: $('compose-form'),
+    composeSend: $('compose-send'),
     pair: $('pair'),
     sheet: $('pair-sheet'),
     pairClose: $('pair-close'),
@@ -32,12 +37,14 @@
     joinError: $('pair-join-error'),
   };
 
-  // localStorage holds the room ID, and from M3 the key. Never item content.
-  const STORAGE_ROOM = 'toss.room';
+  // localStorage holds the room ID and the key, as one entry so they cannot
+  // drift apart. Never item content.
+  const STORAGE = 'toss.room';
 
-  // id -> { item, el }. The single source of truth for what is on screen, and
-  // what makes duplicate delivery (stream replay overlapping a POST response)
-  // a non-event.
+  // id -> { item, el, text }. The single source of truth for what is on screen,
+  // and what makes duplicate delivery (stream replay overlapping a POST
+  // response) a non-event. `text` is the decrypted content, held only here, and
+  // null when this device could not read the item.
   const rendered = new Map();
 
   // Correlation key -> temp id, for sends that have not come back yet. Lets an
@@ -45,12 +52,14 @@
   // render rather than a new arrival, whichever of the two lands first.
   const inflight = new Map();
 
-  // In M1 the only handle both sides share before the POST returns is the
-  // content itself. From M3 it is the IV: the client generates that too, it is
-  // unique per item, and it survives the content becoming ciphertext.
-  const correlate = (item) => item.iv || item.content;
+  // The IV: generated here, unique per item by construction, and unchanged as
+  // the content travels as ciphertext. The content itself cannot serve -- two
+  // encryptions of the same text differ.
+  const correlate = (item) => item.iv;
 
   let room = null;
+  let key = null; // CryptoKey; never leaves this scope
+  let keyB64 = null; // the same key, for the fragment and the QR
   let source = null;
   let pendingSeq = 0;
   let countdownTimer = null;
@@ -58,8 +67,26 @@
   // --- lifecycle ---
 
   async function boot() {
+    // WebCrypto is exposed only in a secure context, so on plain HTTP to
+    // anything but localhost, crypto.subtle is simply undefined. Before M3 that
+    // cost you tap-to-copy; now it costs you the whole app, because there is no
+    // unencrypted mode to fall back to. Say so in words rather than failing
+    // with a null dereference in the console.
+    if (!window.isSecureContext || !window.crypto?.subtle) {
+      setStatus('offline', 'Needs HTTPS');
+      els.pair.disabled = true;
+      els.compose.disabled = true;
+      els.empty.hidden = false;
+      els.empty.textContent =
+        'Toss encrypts everything in the browser, and browsers only allow that ' +
+        'over a secure connection. Open this page over https:// — or on ' +
+        'localhost — and it will work.';
+      console.error('WebCrypto needs a secure context. Use HTTPS, or localhost.');
+      return;
+    }
+
     try {
-      room = await resolveRoom();
+      await resolveSession();
     } catch (err) {
       setStatus('offline', 'No room');
       console.error('room bootstrap failed', err);
@@ -68,30 +95,77 @@
     connect(await backfill());
   }
 
-  // Three ways in, in priority order: the URL you opened (a scan, or a shared
-  // link), the room this device already knows, or a brand new room.
-  async function resolveRoom() {
+  // Three ways in, in priority order: the URL you opened (a scan, or a link
+  // someone sent you), the room this device already knows, or a brand new one.
+  //
+  // A room is only usable with its key, so both halves have to arrive together.
+  // A room ID with no key is not a session -- it is a room whose contents this
+  // device cannot read -- so those cases fall through to minting a fresh one.
+  async function resolveSession() {
     const fromPath = location.pathname.match(/^\/r\/([a-z0-9]+)\/?$/)?.[1];
-    if (fromPath && (await roomExists(fromPath))) {
-      localStorage.setItem(STORAGE_ROOM, fromPath);
-      return fromPath;
+    const fromHash = new URLSearchParams(location.hash.slice(1)).get('k');
+    if (fromPath && fromHash && (await roomExists(fromPath))) {
+      if (await adopt(fromPath, fromHash)) return;
     }
 
-    const stored = localStorage.getItem(STORAGE_ROOM);
-    if (stored && (await roomExists(stored))) {
-      showRoomInURL(stored);
-      return stored;
+    const stored = readStored();
+    if (stored && (await roomExists(stored.id))) {
+      if (await adopt(stored.id, stored.k)) return;
     }
 
     // Either nothing was stored, or the server restarted and lost it. Losing
     // everything on restart is correct for content that expires in 24h.
-    const res = await fetch('/api/rooms', { method: 'POST' });
-    if (!res.ok) throw new Error(`create room: ${res.status}`);
-    const { id } = await res.json();
-    localStorage.setItem(STORAGE_ROOM, id);
-    showRoomInURL(id);
-    return id;
+    const id = await createRoom();
+    if (!(await adopt(id, await TossCrypto.exportKey(await TossCrypto.generateKey())))) {
+      throw new Error('could not adopt a freshly minted room');
+    }
   }
+
+  // Takes a room and its key. Returns false rather than throwing if the key is
+  // unusable -- a truncated fragment or a mangled localStorage entry should
+  // send us on to the next option, not kill the boot.
+  async function adopt(id, k) {
+    try {
+      key = await TossCrypto.importKey(k);
+    } catch (err) {
+      console.error('that key is not usable', err);
+      return false;
+    }
+    room = id;
+    keyB64 = k;
+    localStorage.setItem(STORAGE, JSON.stringify({ id, k }));
+    showRoomInURL();
+    return true;
+  }
+
+  function readStored() {
+    try {
+      const { id, k } = JSON.parse(localStorage.getItem(STORAGE)) || {};
+      return id && k ? { id, k } : null;
+    } catch {
+      return null; // pre-M3 entry, or something else wrote here
+    }
+  }
+
+  // The restart stampede: when the server restarts, every open tab discovers
+  // its room is gone at the same instant and tries to mint. Behind one NAT only
+  // ten get through in the hour, and the rest used to sit on "No room" until
+  // someone reloaded them.
+  //
+  // Retrying turns that into a tab that heals itself. The jitter matters more
+  // than the curve: what has to be broken up is the synchronisation, since the
+  // whole problem is that every tab woke at the same moment.
+  async function createRoom() {
+    for (let attempt = 0; ; attempt++) {
+      const res = await fetch('/api/rooms', { method: 'POST' });
+      if (res.ok) return (await res.json()).id;
+      if (res.status !== 429) throw new Error(`create room: ${res.status}`);
+      setStatus('offline', 'Waiting for a room');
+      await sleep(Math.random() * Math.min(60000, 1000 * 2 ** attempt));
+    }
+  }
+
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
   async function roomExists(id) {
     try {
@@ -102,11 +176,12 @@
     }
   }
 
-  // Keeps location.hash intact -- that is where the key lives from M3, and the
-  // browser never sends it anywhere.
-  function showRoomInURL(id) {
-    if (location.pathname === `/r/${id}`) return;
-    history.replaceState(null, '', `/r/${id}${location.hash}`);
+  // The fragment is the key's home: it survives reload, it is what the QR
+  // encodes, and the browser never puts it on the wire.
+  function showRoomInURL() {
+    const want = `/r/${room}#k=${keyB64}`;
+    if (location.pathname + location.hash === want) return;
+    history.replaceState(null, '', want);
   }
 
   // Renders what the room already holds and returns the newest ID seen, so the
@@ -115,7 +190,9 @@
     const res = await fetch(`/api/rooms/${room}/items`);
     if (!res.ok) return '';
     const { items } = await res.json();
-    for (const item of items) upsert(item, { announce: false });
+    // Decryption order does not matter: insertSorted places by ULID, so the
+    // list is right however these land.
+    await Promise.all(items.map((item) => accept(item, { announce: false })));
     return items.length ? items[items.length - 1].id : '';
   }
 
@@ -129,7 +206,7 @@
     source = new EventSource(url);
     source.onopen = () => setStatus('live', 'Live');
     source.onerror = onStreamError;
-    source.addEventListener('item', (e) => upsert(JSON.parse(e.data)));
+    source.addEventListener('item', (e) => accept(JSON.parse(e.data)));
     source.addEventListener('deleted', (e) => remove(JSON.parse(e.data).id));
   }
 
@@ -148,7 +225,9 @@
       if (await roomExists(room)) return; // ordinary blip; let it retry
       source.close();
       setStatus('offline', 'Room expired');
-      localStorage.removeItem(STORAGE_ROOM);
+      // The key goes with the room. Navigating to '/' drops the fragment too,
+      // so the next boot mints both halves fresh.
+      localStorage.removeItem(STORAGE);
       location.assign('/');
     } finally {
       checkingRoom = false;
@@ -172,7 +251,7 @@
       const res = await fetch(`/api/rooms/${room}/items?since=${encodeURIComponent(newestID())}`);
       if (!res.ok) return;
       const { items } = await res.json();
-      for (const item of items) upsert(item, { announce: false });
+      await Promise.all(items.map((item) => accept(item, { announce: false })));
       if (items.length) {
         els.live.textContent = `${items.length} new item${items.length > 1 ? 's' : ''} while you were away`;
       }
@@ -193,40 +272,103 @@
 
   // --- sending ---
 
-  // Document-level paste. Not a focused input: the paste event hands us
-  // clipboardData with no permission prompt anywhere, including iOS.
+  // Document-level paste. The paste event hands us clipboardData with no
+  // permission prompt anywhere, including iOS.
   // navigator.clipboard.readText() would prompt, and is never used.
+  //
+  // This covers desktop, where paste lands on the document. It cannot cover a
+  // phone: touch browsers only offer "Paste" when an editable element has
+  // focus, which is what the compose field is for.
   document.addEventListener('paste', (e) => {
-    // Let a paste into the pairing code field behave like a normal paste.
     // e.target is whatever had focus -- an element, <body>, or the document
     // itself, which has no closest(). Hence the optional call.
-    if (e.target?.closest?.('input, textarea')) return;
+    const field = e.target?.closest?.('input, textarea');
+    // The pairing code field is the one place a paste should behave like an
+    // ordinary paste. The compose field is the opposite: pasting there is how
+    // you send from a phone, so it is intercepted rather than allowed to land.
+    if (field && field.dataset.role !== 'compose') return;
+
     const text = e.clipboardData?.getData('text');
     if (!text || !room) return;
-    e.preventDefault();
+    e.preventDefault(); // so it never reaches the field, which stays empty
+    resetCompose();
     send(text);
   });
 
-  async function send(content) {
+  // Typed text is not sent until it is finished with -- a paste is already a
+  // deliberate act, whereas typing is in progress until you say otherwise.
+  els.composeForm.addEventListener('submit', (e) => {
+    e.preventDefault();
+    submitCompose();
+  });
+
+  els.compose.addEventListener('keydown', (e) => {
+    // Enter sends, Shift+Enter makes a new line. The usual convention, and it
+    // keeps the field usable for the occasional multi-line note.
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      submitCompose();
+    }
+  });
+
+  els.compose.addEventListener('input', syncCompose);
+
+  function submitCompose() {
+    const text = els.compose.value;
+    if (!text.trim() || !room) return;
+    resetCompose();
+    send(text);
+  }
+
+  function syncCompose() {
+    // Send appears only once there is something to send, so the desktop layout
+    // stays as drawn until it is needed.
+    els.composeSend.hidden = els.compose.value.trim() === '';
+    // Grow with the content instead of scrolling a one-line box. Reset first,
+    // or scrollHeight only ever reports the height it already has.
+    els.compose.style.height = 'auto';
+    els.compose.style.height = `${els.compose.scrollHeight}px`;
+  }
+
+  function resetCompose() {
+    els.compose.value = '';
+    syncCompose();
+  }
+
+  async function send(text) {
+    // Encrypt first: the IV is the handle that ties the optimistic render to
+    // the server's echo, and it has to exist before either happens.
+    let sealed;
+    try {
+      sealed = await TossCrypto.encrypt(key, text);
+    } catch (err) {
+      console.error('encrypt failed', err);
+      els.live.textContent = 'Could not encrypt that — nothing was sent';
+      return;
+    }
+
     // Optimistic echo: on screen now, reconciled later. The UI never waits on
     // the network.
     const tempId = `pending-${++pendingSeq}`;
     const now = new Date().toISOString();
     const pending = {
       id: tempId,
-      content,
+      iv: sealed.iv,
+      content: sealed.content,
       origin: 'This device',
       created_at: now,
       expires_at: new Date(Date.now() + 86400000).toISOString(),
     };
-    upsert(pending, { announce: false, pending: true });
+    // We already hold the plaintext, so this render skips the round trip
+    // through decrypt entirely.
+    upsert(pending, text, { announce: false, pending: true });
     inflight.set(correlate(pending), tempId);
 
     try {
       const res = await fetch(`/api/rooms/${room}/items`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content }),
+        body: JSON.stringify({ iv: sealed.iv, content: sealed.content }),
       });
       if (res.status === 429) {
         const entry = rendered.get(tempId);
@@ -248,7 +390,7 @@
       // these is already a no-op.
       inflight.delete(correlate(item));
       remove(tempId);
-      upsert(item, { announce: false });
+      upsert(item, text, { announce: false });
     } catch (err) {
       console.error('send failed', err);
       inflight.delete(correlate(pending));
@@ -259,7 +401,26 @@
 
   // --- rendering ---
 
-  function upsert(item, { announce = true, pending = false } = {}) {
+  // Everything arriving from the network comes through here: decrypt, then
+  // render. Rendering stays synchronous on purpose, so the duplicate check at
+  // the top of upsert() is still atomic with respect to the insert -- two
+  // deliveries of the same item can both get past the check here, and only one
+  // can get past the one in there.
+  async function accept(item, opts) {
+    if (rendered.has(item.id)) return;
+    let text = null;
+    try {
+      text = await TossCrypto.decrypt(key, item.iv, item.content);
+    } catch {
+      // Wrong key, no key, or a byte moved in transit. AES-GCM cannot tell
+      // those apart and neither can we. Render it anyway: a scrap that says it
+      // cannot be read is honest, whereas a silent gap looks like the product
+      // quietly losing someone's paste.
+    }
+    upsert(item, text, opts);
+  }
+
+  function upsert(item, text, { announce = true, pending = false } = {}) {
     if (rendered.has(item.id)) return; // duplicate delivery -- expected, ignore
 
     // Our own paste, coming back to us. Retire the optimistic copy and stay
@@ -285,18 +446,23 @@
     el.style.setProperty('--rotation', `${seededRotation(item.id)}deg`);
 
     $('origin', el).textContent = item.origin;
-    $('content', el).textContent = item.content;
     $('copy', el).setAttribute('aria-label', `Copy item from ${item.origin}`);
     $('delete', el).setAttribute('aria-label', `Throw away item from ${item.origin}`);
 
-    if (isLong(item.content)) {
-      el.dataset.long = 'true';
-      $('expand', el).hidden = false;
+    if (text === null) {
+      el.dataset.undecryptable = 'true';
+      $('content', el).textContent = 'Sent with a different key — this device cannot read it.';
+    } else {
+      $('content', el).textContent = text;
+      if (isLong(text)) {
+        el.dataset.long = 'true';
+        $('expand', el).hidden = false;
+      }
     }
     applyAge(el, item);
 
     insertSorted(el);
-    rendered.set(item.id, { item, el });
+    rendered.set(item.id, { item, el, text });
     syncChrome();
 
     if (announce) {
@@ -365,9 +531,13 @@
   async function copyItem(id) {
     const entry = rendered.get(id);
     if (!entry) return;
+    if (entry.text === null) {
+      els.live.textContent = 'Cannot copy — this device does not have the key';
+      return;
+    }
     try {
       // Requires a secure context: localhost or HTTPS, no exceptions.
-      await navigator.clipboard.writeText(entry.item.content);
+      await navigator.clipboard.writeText(entry.text);
       entry.el.dataset.copied = 'true';
       els.live.textContent = 'Copied to clipboard';
       setTimeout(() => delete entry.el.dataset.copied, 2000);
@@ -414,25 +584,61 @@
   async function openPairing() {
     els.joinError.textContent = '';
     els.pairCode.textContent = '—';
-    els.pairQR.src = `/api/rooms/${room}/qr.png`;
+    drawPairQR();
     els.sheet.showModal();
 
     try {
-      const res = await fetch('/api/pair', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        // M3 adds `payload`: the room key wrapped under a secret derived from
-        // the code, so the typed path still works without the server ever
-        // holding key material.
-        body: JSON.stringify({ room }),
-      });
-      if (!res.ok) throw new Error(`mint: ${res.status}`);
-      const { code, expires_in } = await res.json();
+      const { code, expires_in } = await mintPairCode();
       els.pairCode.textContent = code;
       startCountdown(expires_in);
     } catch (err) {
       console.error('could not mint a pairing code', err);
       els.pairCode.textContent = 'unavailable';
+    }
+  }
+
+  // The code is chosen here, not by the server, and that is a requirement
+  // rather than a preference: `payload` is the room key sealed under a secret
+  // derived from the code, and the server is holding the payload. If it also
+  // chose the code it would hold both halves and could read the room. Anything
+  // the server picks, the server knows.
+  //
+  // A collision is a 1-in-2^40 event, so it is handled by picking again.
+  async function mintPairCode() {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const code = TossCrypto.newPairCode();
+      const payload = await TossCrypto.wrapForCode(code, key);
+      const res = await fetch('/api/pair', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ room, code, payload }),
+      });
+      if (res.ok) return res.json();
+      if (res.status !== 409) throw new Error(`mint: ${res.status}`);
+    }
+    throw new Error('could not find a free pairing code');
+  }
+
+  // Drawn here rather than fetched from the server, and that is the whole
+  // point: the code has to contain location.hash, which is where the room key
+  // lives from M3 and is precisely what the browser never sends anywhere. A
+  // server-rendered QR could only encode what the server knows, so a scan
+  // could not carry the key. See qr.js.
+  //
+  // location.origin also beats anything the server could infer about its own
+  // public URL -- it is, by definition, the origin this page was actually
+  // loaded from, proxies and all.
+  function drawPairQR() {
+    try {
+      els.pairQR.src = TossQR.toDataURL(`${location.origin}/r/${room}${location.hash}`);
+      els.pairQR.hidden = false;
+    } catch (err) {
+      // Only reachable if the URL outgrows a version 20 code. The typed
+      // pairing code below is a complete path on its own, so lose the image
+      // rather than the sheet.
+      console.error('could not draw the QR', err);
+      els.pairQR.removeAttribute('src');
+      els.pairQR.hidden = true;
     }
   }
 
@@ -472,11 +678,26 @@
         els.joinError.textContent = error || 'That code is not valid.';
         return;
       }
-      const { room: joined } = await res.json();
-      localStorage.setItem(STORAGE_ROOM, joined);
+      const { room: joined, payload } = await res.json();
+
+      // The code did two jobs: the server used it to find the room, and it
+      // unwraps the key here. Only the second one is a secret the server never
+      // learns, so this is where joining actually succeeds or fails.
+      let k;
+      try {
+        k = await TossCrypto.exportKey(await TossCrypto.unwrapWithCode(code, payload));
+      } catch (err) {
+        console.error('the code did not unwrap the room key', err);
+        els.joinError.textContent = 'That code did not unlock the room. Ask for a new one.';
+        return;
+      }
+
+      localStorage.setItem(STORAGE, JSON.stringify({ id: joined, k }));
       // A real navigation rather than swapping state in place: it rebuilds the
-      // stream, the list and the room from scratch, with nothing left over.
-      location.assign(`/r/${joined}`);
+      // stream, the list and the room from scratch, with nothing left over. The
+      // key goes in the fragment, which is the one part of this URL that stays
+      // on the device.
+      location.assign(`/r/${joined}#k=${k}`);
     } catch (err) {
       console.error('join failed', err);
       els.joinError.textContent = 'Could not reach the server.';

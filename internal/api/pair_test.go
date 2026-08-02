@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -9,7 +10,7 @@ import (
 
 func TestMintAndRedeem(t *testing.T) {
 	p := newPairStore()
-	code, expires, err := p.mint("room-1", "wrapped-key")
+	code, expires, err := p.mint("room-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -27,16 +28,73 @@ func TestMintAndRedeem(t *testing.T) {
 	if got.room != "room-1" {
 		t.Fatalf("resolved to %q", got.room)
 	}
-	// The payload is opaque and must come back untouched -- M3 puts the wrapped
-	// room key in there.
+}
+
+func TestClaimCarriesThePayloadBackUntouched(t *testing.T) {
+	p := newPairStore()
+	expires, err := p.claim("K3N8XQ2M", "room-1", "wrapped-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d := time.Until(expires); d > pairTTL || d < pairTTL-time.Minute {
+		t.Fatalf("expiry %v is not about %v away", d, pairTTL)
+	}
+
+	got, ok := p.redeem("K3N8XQ2M")
+	if !ok {
+		t.Fatal("claimed code did not redeem")
+	}
+	if got.room != "room-1" {
+		t.Fatalf("resolved to %q", got.room)
+	}
+	// The payload is the room key wrapped under the code. It is opaque here and
+	// must come back byte for byte, or the far device cannot unwrap it.
 	if got.payload != "wrapped-key" {
 		t.Fatalf("payload came back as %q", got.payload)
 	}
 }
 
+func TestClaimRefusesATakenCode(t *testing.T) {
+	p := newPairStore()
+	if _, err := p.claim("K3N8XQ2M", "room-1", "a"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.claim("K3N8XQ2M", "room-2", "b"); !errors.Is(err, errCodeTaken) {
+		t.Fatalf("second claim gave %v, want errCodeTaken", err)
+	}
+	// The first claim must be untouched -- a loser must not overwrite a winner.
+	got, ok := p.redeem("K3N8XQ2M")
+	if !ok || got.room != "room-1" || got.payload != "a" {
+		t.Fatalf("first claim was clobbered: %+v ok=%v", got, ok)
+	}
+}
+
+func TestClaimRequiresACanonicalCode(t *testing.T) {
+	// Normalisation is for what a person types back, not for what a client
+	// submits: the payload is sealed under the exact string, so accepting a
+	// sloppy one here would seal it under a code nobody can reproduce.
+	for _, bad := range []string{
+		"",
+		"K3N8XQ2",   // too short
+		"K3N8XQ2MM", // too long
+		"k3n8xq2m",  // lower case
+		"K3N8-XQ2M", // the display form
+		"K3N8XQ2I",  // off-alphabet lookalike
+		"K3N8XQ2U",
+	} {
+		p := newPairStore()
+		if _, err := p.claim(bad, "room-1", "x"); !errors.Is(err, errBadCode) {
+			t.Fatalf("claim(%q) gave %v, want errBadCode", bad, err)
+		}
+		if p.len() != 0 {
+			t.Fatalf("claim(%q) was rejected but stored something anyway", bad)
+		}
+	}
+}
+
 func TestSingleRedemption(t *testing.T) {
 	p := newPairStore()
-	code, _, _ := p.mint("room-1", "")
+	code, _, _ := p.mint("room-1")
 
 	if _, ok := p.redeem(code); !ok {
 		t.Fatal("first redemption failed")
@@ -51,7 +109,7 @@ func TestSingleRedemption(t *testing.T) {
 
 func TestExpiredCodeIsRefused(t *testing.T) {
 	p := newPairStore()
-	code, _, _ := p.mint("room-1", "")
+	code, _, _ := p.mint("room-1")
 
 	p.mu.Lock()
 	pr := p.codes[code]
@@ -66,7 +124,7 @@ func TestExpiredCodeIsRefused(t *testing.T) {
 
 func TestMintSweepsExpired(t *testing.T) {
 	p := newPairStore()
-	stale, _, _ := p.mint("room-1", "")
+	stale, _, _ := p.mint("room-1")
 
 	p.mu.Lock()
 	pr := p.codes[stale]
@@ -74,7 +132,7 @@ func TestMintSweepsExpired(t *testing.T) {
 	p.codes[stale] = pr
 	p.mu.Unlock()
 
-	if _, _, err := p.mint("room-2", ""); err != nil {
+	if _, _, err := p.mint("room-2"); err != nil {
 		t.Fatal(err)
 	}
 	if p.len() != 1 {
@@ -90,7 +148,7 @@ func TestCodeAlphabetHasNoLookalikes(t *testing.T) {
 	}
 	p := newPairStore()
 	for range 500 {
-		code, _, err := p.mint("room-1", "")
+		code, _, err := p.mint("room-1")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -124,7 +182,7 @@ func TestNormalizeIsForgiving(t *testing.T) {
 
 func TestRedeemAcceptsTheDisplayedForm(t *testing.T) {
 	p := newPairStore()
-	code, _, _ := p.mint("room-1", "")
+	code, _, _ := p.mint("room-1")
 
 	// What is on screen is hyphenated; what someone types back must work.
 	if _, ok := p.redeem(formatPairCode(code)); !ok {
@@ -145,7 +203,7 @@ func TestCodesAreDistinct(t *testing.T) {
 	p := newPairStore()
 	seen := make(map[string]bool)
 	for range 2000 {
-		code, _, err := p.mint("room-1", "")
+		code, _, err := p.mint("room-1")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -165,7 +223,7 @@ func TestConcurrentMintRedeem(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for range 50 {
-				code, _, err := p.mint("room-1", "")
+				code, _, err := p.mint("room-1")
 				if err != nil {
 					t.Error(err)
 					return
@@ -186,8 +244,8 @@ func TestConcurrentMintRedeem(t *testing.T) {
 // must never cross over.
 func TestCodesResolveToTheirOwnRoom(t *testing.T) {
 	p := newPairStore()
-	a, _, _ := p.mint("room-a", "")
-	b, _, _ := p.mint("room-b", "")
+	a, _, _ := p.mint("room-a")
+	b, _, _ := p.mint("room-b")
 
 	got, _ := p.redeem(a)
 	if got.room != "room-a" {

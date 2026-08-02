@@ -6,6 +6,13 @@
 <meta name="robots" content="noindex">
 <title>Toss</title>
 <link rel="stylesheet" href="/app.css">
+<!--
+  Libraries before app.js: it reads window.TossQR and window.TossCrypto at
+  boot, and defer runs these in document order. Swap the tags and pairing
+  breaks the moment the sheet opens.
+-->
+<script src="/qr.js" defer></script>
+<script src="/crypto.js" defer></script>
 <script src="/app.js" defer></script>
 </head>
 <body>
@@ -45,6 +52,23 @@
 
     <section class="dropzone" data-role="dropzone" aria-labelledby="dropzone-title">
       <h1 class="dropzone-title" id="dropzone-title">Paste anything here</h1>
+
+      <!--
+        A real editable field, and it is load-bearing rather than decorative.
+        The document-level paste listener covers desktop, but a touch browser
+        will not offer "Paste" at all unless an editable element has focus, so
+        without this there is no way to send FROM a phone. It doubles as a
+        place to type a short note.
+      -->
+      <form class="compose" data-role="compose-form">
+        <textarea class="compose-field" data-role="compose" rows="1"
+                  aria-label="Text to send"
+                  placeholder="&#8230;or tap here to type"
+                  autocomplete="off" autocapitalize="sentences"
+                  spellcheck="false" enterkeyhint="send"></textarea>
+        <button type="submit" class="action compose-send" data-role="compose-send" hidden>Send</button>
+      </form>
+
       <p class="dropzone-hint">
         <kbd class="key">&#8984;</kbd>
         <span class="key-sep">or</span>

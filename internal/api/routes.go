@@ -9,12 +9,10 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
 	"github.com/oklog/ulid/v2"
-	qrcode "github.com/skip2/go-qrcode"
 
 	"github.com/pyjeebz/toss/internal/hub"
 )
@@ -22,10 +20,6 @@ import (
 // maxItemBytes caps a single send. Bodies land in memory, so this is enforced
 // at the reader rather than after the fact.
 const maxItemBytes = 256 << 10 // 256 KB
-
-// qrPixels is the rendered QR edge length. The design shows it at 192 CSS px;
-// this is generous enough to stay sharp on a phone.
-const qrPixels = 512
 
 var errNoCode = errors.New("could not find a free pairing code")
 
@@ -93,7 +87,10 @@ func (s *Server) Routes(static fs.FS) http.Handler {
 	mux.HandleFunc("GET /api/rooms/{room}/stream", s.stream)
 	mux.HandleFunc("DELETE /api/rooms/{room}/items/{id}", s.limit(s.writes, s.deleteItem))
 	mux.HandleFunc("DELETE /api/rooms/{room}/items", s.limit(s.writes, s.clearItems))
-	mux.HandleFunc("GET /api/rooms/{room}/qr.png", s.roomQR)
+	// No QR endpoint. The code has to carry the URL fragment, which is where
+	// the room key lives from M3 and which the browser never sends, so the
+	// server could not encode it even if it wanted to. web/qr.js draws it in
+	// the browser instead.
 	mux.HandleFunc("POST /api/pair", s.limit(s.writes, s.mintPair))
 	// Redemption is the one endpoint where a caller is guessing at a secret.
 	mux.HandleFunc("POST /api/pair/{code}", s.limit(s.writes, s.redeemPair))
@@ -205,55 +202,6 @@ func (s *Server) roomPage(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Write(s.index)
-}
-
-// roomQR renders the room URL as a PNG.
-//
-// NOTE FOR M3 -- read before adding the key to this.
-//
-// The QR encodes the room URL WITHOUT a fragment, and it has to stay that way.
-// The server generates this image, so anything encoded into it is something the
-// server knows. Putting the key in here would hand it to the server and undo
-// the entire point of keeping it in the fragment.
-//
-// That means at M3 a scan alone cannot carry the key. Two ways out, and it is a
-// product decision, not a technical one:
-//
-//  1. Client-side QR generation, and this endpoint goes away.
-//  2. The scan gets you into the room, and the key rides the typed pairing code
-//     via the opaque payload on /api/pair (see mintPairRequest).
-func (s *Server) roomQR(w http.ResponseWriter, r *http.Request) {
-	room := s.room(w, r)
-	if room == nil {
-		return
-	}
-
-	png, err := qrcode.Encode(originFor(r)+"/r/"+room.ID, qrcode.Medium, qrPixels)
-	if err != nil {
-		s.Log.Error("encode qr", "err", err)
-		writeErr(w, http.StatusInternalServerError, "could not render code")
-		return
-	}
-
-	w.Header().Set("Content-Type", "image/png")
-	w.Header().Set("Cache-Control", "private, max-age=300")
-	w.Write(png)
-}
-
-// originFor works out the absolute origin to put in the QR. Set TOSS_ORIGIN
-// behind a proxy that rewrites the host.
-func originFor(r *http.Request) string {
-	if o := os.Getenv("TOSS_ORIGIN"); o != "" {
-		return strings.TrimSuffix(o, "/")
-	}
-	scheme := "http"
-	if r.TLS != nil {
-		scheme = "https"
-	}
-	if p := r.Header.Get("X-Forwarded-Proto"); p != "" {
-		scheme = p
-	}
-	return scheme + "://" + r.Host
 }
 
 func (s *Server) healthz(w http.ResponseWriter, r *http.Request) {
