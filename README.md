@@ -2,83 +2,131 @@
 
 Move text between your own devices. Paste on one, it appears on the others.
 
-No accounts, no install, no native app, no database. The server cannot read what
-you send.
+No accounts, no install, no app to download, no database. The content is
+encrypted in your browser, and the key never reaches the server.
 
-## Run it
+**Live at [toss-pyjeebz.fly.dev](https://toss-pyjeebz.fly.dev).**
+
+## Using it
+
+Open it. That's the whole setup — you get a room and an encryption key
+immediately, and the URL becomes `/r/<room>#k=<key>`.
+
+**To send:** paste anywhere on the page (⌘V / Ctrl+V), or tap the field and
+paste or type into it. On a phone the field is the way in, because touch
+browsers only offer "Paste" when a text field has focus. A paste sends straight
+away; typed text sends on Enter.
+
+**To receive:** tap a scrap to copy it back to your clipboard.
+
+**To add a device:** press **Add device** and scan the QR with the other
+device's camera, or type the 8-character code into the same sheet there. Both
+devices stamp PAIRED when it lands. The code lasts 5 minutes and works once.
+
+Scraps expire after 24 hours on their own. You can throw one away sooner, or
+clear the lot.
+
+## What the server can and cannot see
+
+This is the part worth being precise about.
+
+Content is AES-GCM 256, encrypted and decrypted in your browser, with a fresh
+96-bit IV per item. The key lives in the URL fragment — the `#k=...` part —
+which browsers never transmit. So the server stores ciphertext it has no way to
+open, and that isn't a policy, it's arithmetic.
+
+| It sees | It never sees |
+|---|---|
+| Ciphertext and IVs | Anything you paste |
+| How many bytes, and when | Your encryption key |
+| Room IDs (random, tied to no identity) | |
+| Your IP, for rate limiting — in memory, swept | |
+| A cosmetic device label from your User-Agent | |
+| Wrapped pairing payloads, for 5 minutes at most | |
+
+Two ways a second device gets the key, neither of which hands it over:
+
+- **Scanning** — the QR is drawn in your browser and encodes the whole URL,
+  fragment included. The key never touches the network at all.
+- **Typing** — the key is sealed under a secret derived from the pairing code
+  and parked on the server as an opaque blob. The browser picks the code, not
+  the server, for the obvious reason: a server that chose the code would know
+  the secret that opens the blob it is holding.
+
+### What this does not protect you from
+
+- **Anyone with your URL has your scraps.** The key is in the link. Sending
+  someone the address bar contents, or a photo of the QR, gives them the room.
+- **There is no recovery.** No accounts means nothing to reset. Clear your
+  browser storage and lose the link, and the room is gone for good.
+- **A restart wipes everything.** Nothing is written to disk, deliberately.
+
+It is designed to protect your text from the server and from anyone who gets
+hold of what the server stores. It is not a secrets manager.
+
+## How it works
+
+Server-Sent Events, not WebSockets — `EventSource` gives reconnect and
+`Last-Event-ID` replay for free, and phones suspend background tabs constantly,
+so that path runs many times a day.
+
+No database. Rooms, items and subscribers live in memory, and losing them on
+restart is correct for content that expires in a day. The frontend is embedded
+in the binary, so the binary is the entire artifact.
+
+Room IDs are 120 bits of `crypto/rand`. Pairing codes are 8 typeable
+characters that *resolve* to a room ID — deliberately a different thing, since
+40 bits is brute-forceable and a room ID must not be.
+
+## Running it locally
 
 ```sh
 go run ./cmd/toss      # :8080, or set TOSS_ADDR
 ```
 
-Open `http://localhost:8080`. It mints a room and an encryption key, and the URL
-becomes `/r/<room>#k=<key>`.
+`localhost` counts as a secure context, so this works over plain HTTP.
 
-**To send:** paste anywhere on the page (⌘V / Ctrl+V), or tap the field and
-paste or type into it. On a phone the field is the way in — touch browsers only
-offer "Paste" when a text field has focus. A paste sends straight away; typed
-text sends on Enter or the Send button.
-
-**To receive:** tap a scrap to copy it back to your clipboard.
-
-To bring in a second device, press **Add device**. Scan the QR, or type the
-8-character code into the same sheet on the other device. Either way both
-devices end up holding the same key.
-
-## How the encryption works
-
-Content is AES-GCM 256, encrypted and decrypted in the browser. A fresh 96-bit
-IV per item.
-
-The key lives in the URL fragment — the `#k=...` part. Browsers never send the
-fragment to the server, so the server stores ciphertext it has no way to open.
-It never sees the key, and it never parses, transforms or logs the content.
-
-Two ways the second device gets the key:
-
-- **Scanning** — the QR is drawn in the browser and encodes the whole URL,
-  fragment included. The key never touches the network.
-- **Typing** — the key is sealed under a secret derived from the pairing code
-  and parked on the server as an opaque blob. The code is generated by the
-  browser, not the server, for the obvious reason: a server that picked the code
-  could open the blob it is holding.
-
-The pairing code is 8 characters, valid for 5 minutes, and can be redeemed once.
-
-**This requires HTTPS.** Browsers only expose WebCrypto in a secure context, so
-on plain HTTP to anything other than `localhost` the app will tell you it needs
-a secure connection and stop. There is no unencrypted mode.
+**Anywhere else needs real HTTPS.** Browsers expose WebCrypto only in a secure
+context, so over plain HTTP `crypto.subtle` is undefined and there is no
+unencrypted mode to fall back to — the app says it needs a secure connection and
+stops. Testing from a phone on your LAN needs a tunnel with TLS, not an IP
+address.
 
 ## Deploying
-
-The Dockerfile builds a static binary into a distroless image. The frontend is
-embedded, so the binary is the entire artifact.
 
 ```sh
 docker build -t toss .
 docker run -p 8080:8080 toss
 ```
 
-Two rules, and they are both easy to break by accident:
+**Run exactly one instance.** Every room, item and subscriber lives in one
+process's memory and there is no cross-process fan-out. Two instances behind a
+load balancer means a POST landing on one while the recipient's stream is held
+by the other is delivered to nobody — no error, no log line, a 201 to the
+sender. It presents as "toss is flaky", not as a misconfiguration.
 
-**Run exactly one instance.** Every room, item and subscriber lives in this
-process's memory. Two instances behind a load balancer means a POST landing on
-one while the recipient's stream is held by the other is delivered to nobody —
-no error, no log line, a 201 to the sender. It presents as "toss is flaky",
-not as a misconfiguration.
+That rules out serverless platforms: they run many stateless invocations by
+design, and long-lived SSE streams outlive their execution limits.
 
-This rules out serverless platforms, Vercel included: they run many stateless
-invocations by design, and long-lived SSE streams outlive their execution
-limits. Use something that will hold a single long-running process — Fly.io,
-Render, Railway, or a VM with a reverse proxy.
+`fly.toml` is included and pinned to one machine. Note that `fly deploy`
+creates **two** machines by default, and `min_machines_running` does not
+prevent it:
 
-**Terminate TLS in front of it.** See above; without HTTPS the app does not
-start.
+```sh
+fly deploy --ha=false
+```
+
+To check any deployment from outside — a single process's room count can only
+go up, so if this alternates, you have more than one machine:
+
+```sh
+for i in $(seq 6); do curl -s https://<app>/healthz; echo; done
+```
 
 | | |
 |---|---|
 | `TOSS_ADDR` | listen address, default `:8080` |
-| `TOSS_TRUST_PROXY` | honour `X-Forwarded-For` for per-IP limits. Only set this behind a proxy you control — the header is client-supplied, and trusting it otherwise turns every rate limit into a suggestion. |
+| `TOSS_TRUST_PROXY` | honour `X-Forwarded-For` for per-IP limits. Only set this behind a proxy you control — the header is client-supplied, so trusting it otherwise turns every rate limit into a suggestion. |
 
 ## Limits
 
@@ -94,26 +142,34 @@ start.
 Reads are never rate limited. A phone waking up and reconnecting all day is the
 product working correctly, not abuse.
 
-Nothing is persisted. A restart loses everything, which is the right behaviour
-for content that expires in a day anyway.
-
 ## Tests
 
 ```sh
 go test -race ./...    # the hub is concurrent; always use -race
 ```
 
-`web/qr.js` and `web/crypto.js` are checked by running them under `node` — the
-QR encoder against a second implementation module-by-module, the crypto by its
-properties plus a full two-device pairing run against a real server. Those tests
-skip if `node` is not installed, so the suite still passes without it, but then
-nothing is checking either file.
+`web/qr.js` and `web/crypto.js` are hand-written and run under `node`, with
+every pass/fail decision made in Go so a bug in the test driver cannot vote
+itself correct.
 
-## Development notes
+The QR encoder is compared against a second implementation module-by-module, at
+every version and on both sides of every capacity boundary — a wrong table entry
+produces a code that still *looks* like a QR and simply does not scan, which is
+a bug that reaches a phone camera before it reaches a person. The crypto is
+checked by the properties whose failure is silent, plus an end-to-end run where
+one device pairs by typed code and reads back what the other sent, asserting
+that neither the plaintext nor the key appears in what the server serves.
+
+Those tests skip without `node`, so the suite still passes — but then nothing is
+checking either file.
+
+## Notes
 
 `CLAUDE.md` carries the design decisions, the things that look optional and are
-not, and the traps. Read it before changing anything in `internal/hub` or the
-pairing path.
+load-bearing, and the traps. Worth reading before changing `internal/hub` or
+anything on the pairing path.
 
-Stack is deliberately plain: Go standard library plus `oklog/ulid`, and vanilla
-JS with no build step. `skip2/go-qrcode` is in `go.mod` but is test-only.
+The stack is deliberately plain: Go standard library plus `oklog/ulid`, and
+vanilla JS with no build step, no framework and no bundler. `skip2/go-qrcode`
+is in `go.mod` but is test-only — it is the reference the QR encoder is checked
+against, and it is not linked into the binary.
