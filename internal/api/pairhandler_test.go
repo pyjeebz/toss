@@ -20,11 +20,14 @@ func pairServer(t *testing.T) (http.Handler, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Routes only reads index.html out of the tree, and none of these tests
-	// touch the static handler, so a stub keeps this package independent of the
-	// real frontend.
-	static := fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("<!doctype html>")}}
-	return s.Routes(static), room.ID
+	return s.Routes(stubStatic()), room.ID
+}
+
+// stubStatic is enough for Routes, which only reads index.html out of the tree.
+// None of these tests touch the static handler, so this keeps the package
+// independent of the real frontend.
+func stubStatic() fstest.MapFS {
+	return fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("<!doctype html>")}}
 }
 
 func postPair(t *testing.T, h http.Handler, body string) *httptest.ResponseRecorder {

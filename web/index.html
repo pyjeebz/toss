@@ -124,6 +124,13 @@
     </div>
   </dialog>
 
+  <!--
+    Stamped across the page when a device joins. Purely decorative -- the live
+    region below carries the actual announcement, including which device, so
+    nothing depends on seeing this.
+  -->
+  <p class="paired-stamp" data-role="paired" aria-hidden="true">Paired</p>
+
   <!-- Arrivals are announced here. Never the content -- just that one landed. -->
   <p class="live-region" data-role="live" role="status" aria-live="polite"></p>
 </div>

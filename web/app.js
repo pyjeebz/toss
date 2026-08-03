@@ -35,6 +35,7 @@
     joinForm: $('pair-join-form'),
     joinInput: $('pair-join-input'),
     joinError: $('pair-join-error'),
+    paired: $('paired'),
   };
 
   // localStorage holds the room ID and the key, as one entry so they cannot
@@ -63,6 +64,12 @@
   let source = null;
   let pendingSeq = 0;
   let countdownTimer = null;
+  let pairedTimer = null;
+  let pendingAnnounce = null; // pairing code lifted off a scanned QR
+
+  // Survives the reload that joining by typed code performs, so the device that
+  // typed it gets the same confirmation as the one that showed it.
+  const JUST_PAIRED = 'toss.justPaired';
 
   // --- lifecycle ---
 
@@ -93,6 +100,29 @@
       return;
     }
     connect(await backfill());
+
+    // We arrived here by joining, and the reload lost the fact. Say so.
+    if (sessionStorage.getItem(JUST_PAIRED)) {
+      sessionStorage.removeItem(JUST_PAIRED);
+      showPaired();
+    }
+    announcePairing();
+  }
+
+  // A scanned QR carries the pairing code as well as the key, and redeeming it
+  // is purely how the device that showed the QR finds out the scan worked --
+  // it has no other channel. The key already came from the fragment, so the
+  // response is discarded and a failure costs nothing but the notification.
+  async function announcePairing() {
+    const code = pendingAnnounce;
+    pendingAnnounce = null;
+    if (!code) return;
+    try {
+      const res = await fetch(`/api/pair/${encodeURIComponent(code)}`, { method: 'POST' });
+      if (res.ok) showPaired();
+    } catch (err) {
+      console.error('could not announce the pairing', err);
+    }
   }
 
   // Three ways in, in priority order: the URL you opened (a scan, or a link
@@ -103,9 +133,14 @@
   // device cannot read -- so those cases fall through to minting a fresh one.
   async function resolveSession() {
     const fromPath = location.pathname.match(/^\/r\/([a-z0-9]+)\/?$/)?.[1];
-    const fromHash = new URLSearchParams(location.hash.slice(1)).get('k');
+    const params = new URLSearchParams(location.hash.slice(1));
+    const fromHash = params.get('k');
     if (fromPath && fromHash && (await roomExists(fromPath))) {
+      // Read before adopting: adopt rewrites the URL to the canonical
+      // /r/<room>#k=<key>, which drops the code.
+      pendingAnnounce = params.get('c');
       if (await adopt(fromPath, fromHash)) return;
+      pendingAnnounce = null;
     }
 
     const stored = readStored();
@@ -208,6 +243,7 @@
     source.onerror = onStreamError;
     source.addEventListener('item', (e) => accept(JSON.parse(e.data)));
     source.addEventListener('deleted', (e) => remove(JSON.parse(e.data).id));
+    source.addEventListener('paired', (e) => showPaired(JSON.parse(e.data).origin));
   }
 
   // EventSource reconnects on its own and replays via Last-Event-ID, so the
@@ -588,8 +624,12 @@
     els.sheet.showModal();
 
     try {
-      const { code, expires_in } = await mintPairCode();
+      const { code, expires_in, raw } = await mintPairCode();
       els.pairCode.textContent = code;
+      // Redraw now that there is a code to carry. The first draw happened
+      // before the mint returned, so there would be something on screen
+      // immediately rather than a blank square for a round trip.
+      drawPairQR(raw);
       startCountdown(expires_in);
     } catch (err) {
       console.error('could not mint a pairing code', err);
@@ -613,7 +653,9 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ room, code, payload }),
       });
-      if (res.ok) return res.json();
+      // `raw` is the unformatted code, for the QR. The response's own `code` is
+      // the hyphenated form that goes on screen.
+      if (res.ok) return { ...(await res.json()), raw: code };
       if (res.status !== 409) throw new Error(`mint: ${res.status}`);
     }
     throw new Error('could not find a free pairing code');
@@ -628,9 +670,17 @@
   // location.origin also beats anything the server could infer about its own
   // public URL -- it is, by definition, the origin this page was actually
   // loaded from, proxies and all.
-  function drawPairQR() {
+  function drawPairQR(code) {
     try {
-      els.pairQR.src = TossQR.toDataURL(`${location.origin}/r/${room}${location.hash}`);
+      // The pairing code rides in the fragment alongside the key, so a scan
+      // announces itself exactly the way a typed code does. Without it the
+      // scan is invisible to the server, and this device -- holding a QR and a
+      // countdown -- would never learn that it worked.
+      //
+      // Being in the fragment, it still only reaches the server if the scanning
+      // device chooses to redeem it.
+      const hash = code ? `${location.hash}&c=${code}` : location.hash;
+      els.pairQR.src = TossQR.toDataURL(`${location.origin}/r/${room}${hash}`);
       els.pairQR.hidden = false;
     } catch (err) {
       // Only reachable if the URL outgrows a version 20 code. The typed
@@ -665,6 +715,27 @@
     countdownTimer = null;
   }
 
+  // Both devices land here: the one that offered the code gets it over the
+  // stream, the one that joined calls it directly. Either way the sheet has
+  // done its job and the code on screen is spent.
+  function showPaired(origin) {
+    if (els.sheet.open) els.sheet.close();
+
+    // Metadata only, and the one place the device label is worth saying out
+    // loud -- "Paired with iPhone · Safari" is the confirmation; the stamp is
+    // just the flourish.
+    els.live.textContent = origin ? `Paired with ${origin}` : 'Paired';
+
+    clearTimeout(pairedTimer);
+    // Re-stamp even if one is still on screen. Dropping the attribute and
+    // forcing a reflow before setting it again is what restarts the transition
+    // rather than leaving it sitting where it already was.
+    delete els.paired.dataset.show;
+    void els.paired.offsetWidth;
+    els.paired.dataset.show = 'true';
+    pairedTimer = setTimeout(() => delete els.paired.dataset.show, 1800);
+  }
+
   els.joinForm.addEventListener('submit', async (e) => {
     e.preventDefault();
     const code = els.joinInput.value.trim();
@@ -693,6 +764,9 @@
       }
 
       localStorage.setItem(STORAGE, JSON.stringify({ id: joined, k }));
+      // The redeem above already told the other device. This is how we tell
+      // ourselves, across the reload on the next line.
+      sessionStorage.setItem(JUST_PAIRED, '1');
       // A real navigation rather than swapping state in place: it rebuilds the
       // stream, the list and the room from scratch, with nothing left over. The
       // key goes in the fragment, which is the one part of this URL that stays

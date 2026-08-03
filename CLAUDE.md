@@ -214,6 +214,16 @@ Two things to know before editing those tests:
   by ID.
 - `deleted` events carry no `id:` field. Advancing `Last-Event-ID` to a deleted
   item's ULID would make a reconnect skip everything published since.
+- `paired` events carry no `id:` field either, for the same reason, and are
+  never replayed. It is a live notification; telling a reconnecting client
+  about a pairing from an hour ago would be a lie told with a stamp on it.
+- The QR carries the pairing code (`&c=`) as well as the key. Without it a scan
+  is **invisible to the server** — it is just a room URL — so the device
+  holding the QR would never learn the scan worked. Being in the fragment, the
+  code still only reaches the server if the scanning device redeems it.
+- `drawPairQR()` is called **twice** when the sheet opens: once immediately so
+  there is something on screen, and again once the mint returns and there is a
+  code to embed. Drop the second call and scans stop announcing themselves.
 - Pairing codes are single-redemption and expire in 5 minutes. 40 bits is not
   much, so the window and the one-guess-per-code rule are what make it safe.
   Redeem failures return one message for "unknown", "used" and "expired" alike;
@@ -434,6 +444,17 @@ style="--rotation: -0.4deg"             seeded from the ULID, stable everywhere
 `data-undecryptable` is usually not a fault — it is a scrap from before this
 device was paired — so it is styled in the same voice as the rest of the chrome
 rather than as an error, and its Copy button is disabled.
+
+```
+[data-role="paired"][data-show]         the PAIRED stamp, ~1.8s
+```
+
+Both devices show it: the one that offered the code gets a `paired` event over
+the stream, the one that joined calls `showPaired()` directly. The joining
+device needs `sessionStorage` for the typed path, because redeeming is followed
+by a real navigation that would otherwise lose the fact. The stamp itself is
+`aria-hidden`; the live region carries "Paired with iPhone · Safari", which is
+the only place the cosmetic device label is worth saying out loud.
 
 ## Scope — do not build, do not scaffold for
 

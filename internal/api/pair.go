@@ -287,10 +287,16 @@ func (s *Server) redeemPair(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "that code is not valid")
 		return
 	}
-	if s.Hub.Get(pr.room) == nil {
+	room := s.Hub.Get(pr.room)
+	if room == nil {
 		writeErr(w, http.StatusNotFound, "that room is gone")
 		return
 	}
+
+	// Tell the room a device arrived. The device that offered the code has no
+	// other way to find out: it is holding a QR and a countdown, and nothing
+	// else ever travels from the server to it unprompted.
+	room.Paired(originFromUA(r.UserAgent()))
 
 	s.Log.Info("pairing code redeemed", "room", pr.room)
 	writeJSON(w, http.StatusOK, map[string]any{

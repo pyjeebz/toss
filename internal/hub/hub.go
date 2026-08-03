@@ -41,18 +41,20 @@ type EventKind string
 const (
 	EventItem    EventKind = "item"
 	EventDeleted EventKind = "deleted"
+	EventPaired  EventKind = "paired"
 )
 
 // Event is one thing that happened in a room.
 //
 // The brief's subscriber carries a bare Item; it carries an Event instead so
 // that deletions can ride the same channel as arrivals without encoding "this
-// one is a tombstone" into the Item itself. ID is always set; Item is only
-// meaningful for EventItem.
+// one is a tombstone" into the Item itself. Item is only meaningful for
+// EventItem, Origin only for EventPaired.
 type Event struct {
-	Kind EventKind
-	ID   string
-	Item Item
+	Kind   EventKind
+	ID     string
+	Item   Item
+	Origin string
 }
 
 type subscriber struct {
@@ -143,6 +145,18 @@ func (r *Room) Publish(it Item) {
 	r.mu.Unlock()
 
 	r.broadcast(Event{Kind: EventItem, ID: it.ID, Item: it})
+}
+
+// Paired announces that a device has joined, so the device that offered the
+// code can stop showing it and say so.
+//
+// This is the one event the server originates rather than relays, and it is
+// pure notification: nothing is stored, nothing is replayed, and origin is the
+// same cosmetic "Windows · Chrome" label items carry. It touches no content, so
+// it costs the end-to-end guarantee nothing.
+func (r *Room) Paired(origin string) {
+	r.Touch()
+	r.broadcast(Event{Kind: EventPaired, Origin: origin})
 }
 
 // Delete removes one item and reports whether it was there.

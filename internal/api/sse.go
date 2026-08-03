@@ -82,6 +82,8 @@ func (s *Server) stream(w http.ResponseWriter, r *http.Request) {
 				err = writeItem(w, ev.Item)
 			case hub.EventDeleted:
 				err = writeDeleted(w, ev.ID)
+			case hub.EventPaired:
+				err = writePaired(w, ev.Origin)
 			}
 			if err != nil {
 				return
@@ -107,6 +109,19 @@ func writeItem(w http.ResponseWriter, it hub.Item) error {
 		return err
 	}
 	_, err = fmt.Fprintf(w, "id: %s\nevent: item\ndata: %s\n\n", it.ID, payload)
+	return err
+}
+
+// writePaired announces a device joining. No `id:` field, for the same reason
+// writeDeleted has none, and it is never replayed: it is a live notification,
+// and a reconnecting client being told about a pairing from an hour ago would
+// be a lie told with a stamp on it.
+func writePaired(w http.ResponseWriter, origin string) error {
+	payload, err := json.Marshal(map[string]string{"origin": origin})
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(w, "event: paired\ndata: %s\n\n", payload)
 	return err
 }
 

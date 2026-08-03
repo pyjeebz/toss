@@ -608,6 +608,47 @@ body {
   pointer-events: none;
 }
 
+/* ---------- the PAIRED stamp ---------- */
+
+/*
+  Same rubber-stamp vocabulary as the COPIED stamp on a scrap, scaled up to the
+  page: this is the one moment worth interrupting for, and it wants to feel like
+  something landed on the desk rather than a toast sliding in.
+*/
+.paired-stamp {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  z-index: 60;
+  margin: 0;
+  translate: -50% -50%;
+  rotate: -12deg;
+  padding: 0.75rem 2rem;
+  font-family: var(--font-ui);
+  font-size: clamp(2.5rem, 12vw, 5rem);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  color: var(--stamp);
+  border: 6px solid var(--stamp);
+  mix-blend-mode: var(--ink-blend);
+  pointer-events: none;
+  opacity: 0;
+  scale: 1.6;
+  transition:
+    opacity 0.25s ease,
+    scale 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+  /* Roughs the ink up so it reads as rubber, not vector. */
+  mask-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.2' numOctaves='3'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.8'/%3E%3C/svg%3E");
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.2' numOctaves='3'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.8'/%3E%3C/svg%3E");
+}
+
+.paired-stamp[data-show] {
+  opacity: 0.92;
+  scale: 1;
+}
+
 /* ---------- empty state and footer ---------- */
 
 .scrap-empty {
@@ -845,7 +886,8 @@ body {
 
   /* Paper that never moved does not need to be straightened, but a stamp that
      cannot animate should at least not arrive mid-scale. */
-  .scrap-stamp {
+  .scrap-stamp,
+  .paired-stamp {
     scale: 1;
   }
 }
