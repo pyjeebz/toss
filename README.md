@@ -5,7 +5,7 @@ Move text between your own devices. Paste on one, it appears on the others.
 No accounts, no install, no app to download, no database. The content is
 encrypted in your browser, and the key never reaches the server.
 
-**Live at [toss-pyjeebz.fly.dev](https://toss-pyjeebz.fly.dev).**
+**Live at [toss.pyjeebz.com](https://toss.pyjeebz.com).**
 
 ## Using it
 
