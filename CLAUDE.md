@@ -370,13 +370,20 @@ Other things worth knowing before editing this:
   `icon.svg` is the only source — `generate.sh` derives the full-bleed variant
   from it with `sed`.
 
-**Unverified: whether iOS shares `localStorage` between Safari and a home-screen
-app.** iOS has historically given installed web apps their own storage jar. If
-that still holds, installing after pairing lands in an *empty* `localStorage`,
-`resolveSession()` falls through to `createRoom()`, and the user gets a new
-empty room rather than their own. It degrades safely — pairing again fixes it —
-but it needs testing on a real device, and if it is partitioned then "installing
-counts as a new device" has to be said in the UI rather than discovered.
+**Checked on a real iPhone (2026-08-05): iOS shares `localStorage` between
+Safari and the home-screen app.** Pair in Safari, add to the home screen, open
+it from the icon, and you land in the same room — `resolveSession()` finds the
+stored `{id, k}` and adopts it, exactly as it does for a returning tab.
+
+This was the one open question, because iOS has historically given installed web
+apps their own storage jar. Had it still been partitioned, installing after
+pairing would have fallen through to `createRoom()` and handed the user a new
+empty room, and "installing counts as a new device" would have had to be said
+in the pairing sheet rather than discovered. It does not, so there is nothing to
+say and nothing to build.
+
+Worth re-checking if iOS ever changes it: the symptom is that installing looks
+like it silently forgot your scraps.
 
 ## Fonts
 
@@ -583,10 +590,8 @@ What is left is deployment and one physical check, not code.
    here has put a symbol in front of an actual camera. Do it before launch.
 4. **Decide what happens to `web/fonts/OFL-*.txt`** — they are embedded and
    served, which satisfies the OFL, but nothing links to them from the page.
-5. **Add the app to an iPhone home screen, once**, and check whether it lands
-   in the room Safari was already in or mints a new one. That is the one open
-   question about the manifest, and it needs a device — see "Settled: the
-   manifest starts at `/`".
+~~5. **Add the app to an iPhone home screen, once.**~~ Done — it resumes the
+   room Safari was in. See "Settled: the manifest starts at `/`".
 
 Not blockers, and both deliberate: catch-up only adds and cannot see deletions
 made while a tab was away; the layout reflow on delete is still missing.
