@@ -2,8 +2,8 @@
 
 Move text between your own devices. Paste on one, it appears on the others.
 
-No accounts, no install, no app to download, no database. The content is
-encrypted in your browser, and the key never reaches the server.
+No accounts, no app store, no database, nothing you have to install. The
+content is encrypted in your browser, and the key never reaches the server.
 
 **Live at [toss.pyjeebz.com](https://toss.pyjeebz.com).**
 
@@ -25,6 +25,12 @@ devices stamp PAIRED when it lands. The code lasts 5 minutes and works once.
 
 Scraps expire after 24 hours on their own. You can throw one away sooner, or
 clear the lot.
+
+**To keep it handy:** add it to your home screen — "Add to Home Screen" on
+iOS, "Install app" or "Add to Home screen" in Chrome's menu on Android. That
+is a shortcut and nothing more: no download, no store, no background process,
+and no offline cache. The app behaves identically in a tab, and you never have
+to do it.
 
 ## What the server can and cannot see
 

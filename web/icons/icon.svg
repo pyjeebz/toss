@@ -1,0 +1,18 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Background: Deep minimalist dark -->
+  <rect width="512" height="512" rx="112" fill="#0A0A0A"/>
+  
+  <!-- Device/Location 1 (Origin) -->
+  <rect x="136" y="136" width="176" height="192" rx="24" stroke="#333333" stroke-width="24" stroke-linejoin="round"/>
+  
+  <!-- Device/Location 2 (Destination with text payload) -->
+  <rect x="216" y="200" width="160" height="176" rx="24" fill="#FFFFFF"/>
+  
+  <!-- Text snippet lines -->
+  <rect x="248" y="240" width="96" height="16" rx="8" fill="#0A0A0A"/>
+  <rect x="248" y="272" width="64" height="16" rx="8" fill="#0A0A0A"/>
+  <rect x="248" y="304" width="80" height="16" rx="8" fill="#0A0A0A"/>
+  
+  <!-- Live Sync Beacon -->
+  <circle cx="360" cy="152" r="16" fill="#14B8A6"/>
+</svg>

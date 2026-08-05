@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io/fs"
 	"log/slog"
+	"mime"
 	"net/http"
 	"strings"
 	"time"
@@ -22,6 +23,16 @@ import (
 const maxItemBytes = 256 << 10 // 256 KB
 
 var errNoCode = errors.New("could not find a free pairing code")
+
+// Go's mime table has no entry for .webmanifest, and http.ServeContent falls
+// back to sniffing, which lands on text/plain. Chrome refuses a manifest served
+// as text/plain, so the install prompt just never appears -- with no error
+// anywhere except the devtools console of whoever happens to look.
+func init() {
+	if err := mime.AddExtensionType(".webmanifest", "application/manifest+json"); err != nil {
+		panic("registering the webmanifest MIME type: " + err.Error())
+	}
+}
 
 // Server wires handlers to the hub.
 type Server struct {

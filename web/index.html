@@ -6,6 +6,21 @@
 <meta name="robots" content="noindex">
 <title>Toss</title>
 <link rel="stylesheet" href="/app.css">
+
+<!--
+  Installing is optional and changes nothing about how the app works. The
+  manifest's start_url is "/" and must stay that way: resolveSession() reads
+  the room and key back out of localStorage when it lands there, so the
+  launcher never needs them in the URL. Putting a room in start_url would mean
+  either the server generating a per-room manifest -- handing it the key, which
+  is the one thing the fragment exists to prevent -- or a data: manifest, which
+  the CSP blocks. See CLAUDE.md.
+-->
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icons/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+<meta name="theme-color" content="#ebeae4" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#131416" media="(prefers-color-scheme: dark)">
 <!--
   Libraries before app.js: it reads window.TossQR and window.TossCrypto at
   boot, and defer runs these in document order. Swap the tags and pairing
