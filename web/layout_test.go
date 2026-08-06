@@ -50,6 +50,16 @@ func TestThePairingSheetCanScroll(t *testing.T) {
 	if !strings.Contains(sheet, "padding:") {
 		t.Error(".sheet needs padding to keep the rough edge inside the scroll box")
 	}
+	// The scrollbar is hidden for looks. That is only safe while the scrolling
+	// itself survives, which is what the assertions above are for -- the two
+	// belong together, and this is here so removing one draws attention to the
+	// other.
+	if !strings.Contains(sheet, "scrollbar-width: none") {
+		t.Error(".sheet should hide the scrollbar; the design cannot absorb a gutter")
+	}
+	if !strings.Contains(string(raw), ".sheet::-webkit-scrollbar") {
+		t.Error("no ::-webkit-scrollbar rule, so Chrome and Safari still draw one")
+	}
 }
 
 // The note explaining what "start a new room" destroys has to follow the button

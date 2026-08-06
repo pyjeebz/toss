@@ -493,7 +493,14 @@ The padding is load-bearing: scrolling one axis clips the other, and
 `.sheet-body::before` paints outside its box in both — the rough edge by a
 couple of px, the drop shadow by considerably more. Without room to land in,
 turning on scrolling slices the paper's torn edge off square.
-`web/layout_test.go` pins all four.
+
+**The scrollbar is hidden, the scrolling is not** — `scrollbar-width: none`
+plus a `::-webkit-scrollbar` rule. A gutter down the side of a torn paper sheet
+is the one piece of browser chrome this design cannot absorb, and wheel, touch
+and keyboard all still work without it. The hidden bar is exactly why the rest
+of this has to stay: someone who sees no scrollbar and concludes the sheet does
+not scroll, and then drops `overflow-y`, puts the button out of reach again.
+`web/layout_test.go` pins all of it together for that reason.
 
 Rotation reuses `createRoom()`, so it inherits the jittered 429 backoff. Hammer
 the button and you hit the 10-rooms/hour cap like anything else.

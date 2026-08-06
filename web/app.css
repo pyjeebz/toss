@@ -704,14 +704,25 @@ body {
   margin: auto;
   width: calc(100% - 2rem);
   max-width: 24rem;
-  max-height: 100vh;
-  max-height: 100dvh;
+  max-height: calc(100vh - 2rem);
+  max-height: calc(100dvh - 2rem);
   padding: 1.5rem 1rem;
   border: 0;
   background: transparent;
   overflow-y: auto;
   overscroll-behavior: contain;
+  /* The scrollbar is hidden; the scrolling is not. A gutter down the side of a
+     torn paper sheet is the one piece of browser chrome this design cannot
+     absorb. Wheel, touch and keyboard all still work -- and on most screens the
+     sheet fits anyway, so there is usually nothing to scroll. Do NOT reach for
+     overflow: hidden or drop overflow-y here: the sheet is position: fixed, so
+     that puts the bottom of it out of reach again. See layout_test.go. */
+  scrollbar-width: none;
   color: var(--graphite);
+}
+
+.sheet::-webkit-scrollbar {
+  display: none;
 }
 
 .sheet::backdrop {
