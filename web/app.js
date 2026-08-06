@@ -19,6 +19,7 @@
     list: $('list'),
     empty: $('empty'),
     clear: $('clear'),
+    keys: $('keys'),
     status: $('status'),
     statusLabel: $('status-label'),
     peers: $('peers'),
@@ -455,6 +456,91 @@
     }
   }
 
+  // --- motion ---
+
+  // The CSS reduced-motion block cannot reach any of this: it neutralises CSS
+  // animations and transitions, and everything below is Web Animations, which
+  // is a different pipeline. So it gets asked directly.
+  const reduced = window.matchMedia('(prefers-reduced-motion: reduce)');
+
+  const REFLOW_MS = 300;
+  const REFLOW_EASE = 'cubic-bezier(0.22, 1, 0.36, 1)'; // matches .scrap in app.css
+
+  // FLIP. Measure where every scrap is, let the caller change the list, then
+  // measure again and animate each one from where it was to where it now is.
+  //
+  // This is the piece the design has been missing since M4: position in flow is
+  // not a transitionable property, so when a scrap is thrown away or a new one
+  // lands at the top, everything below it teleports. Arrivals are the common
+  // case, not deletions -- a paste moves every scrap on screen.
+  //
+  // Newly inserted elements are deliberately skipped. They have no "before", and
+  // @starting-style in app.css already drops them in.
+  let reflowing = false;
+  function reflow(mutate) {
+    // Nested calls just run: the outer one is already measuring around them.
+    if (reduced.matches || reflowing) {
+      mutate();
+      return;
+    }
+    reflowing = true;
+    try {
+      const before = new Map();
+      for (const el of els.list.children) before.set(el, el.getBoundingClientRect().top);
+
+      mutate();
+
+      // Read every new position before writing any animation, so this costs one
+      // layout rather than one per scrap.
+      const moved = [];
+      for (const el of els.list.children) {
+        const from = before.get(el);
+        if (from === undefined || el.dataset.leaving) continue;
+        const delta = from - el.getBoundingClientRect().top;
+        if (delta) moved.push([el, delta]);
+      }
+      for (const [el, delta] of moved) {
+        // translate only. app.css sets rotate and scale as individual
+        // properties, so this composes with the seeded tilt instead of
+        // flattening it the way a combined transform would.
+        el.animate(
+          [{ translate: `0 ${delta}px` }, { translate: '0 0' }],
+          { duration: REFLOW_MS, easing: REFLOW_EASE }
+        );
+      }
+    } finally {
+      reflowing = false;
+    }
+  }
+
+  // Lifts a scrap out of flow so the gap closes immediately, then fades it over
+  // the space it used to occupy. Doing it in that order is what lets the exit
+  // and the reflow run at the same time rather than one after the other.
+  function animateOut(el) {
+    const rect = el.getBoundingClientRect();
+    const list = els.list.getBoundingClientRect();
+
+    reflow(() => {
+      el.dataset.leaving = 'true';
+      el.style.position = 'absolute';
+      el.style.top = `${rect.top - list.top}px`;
+      el.style.left = `${rect.left - list.left}px`;
+      el.style.width = `${rect.width}px`;
+      el.style.margin = '0';
+    });
+
+    el.animate(
+      [
+        { opacity: 1, scale: 1, translate: '0 0' },
+        { opacity: 0, scale: 0.94, translate: '0 -8px' },
+      ],
+      { duration: 200, easing: 'ease-in', fill: 'forwards' }
+    ).finished.then(
+      () => el.remove(),
+      () => el.remove() // cancelled, e.g. the room was rebuilt underneath us
+    );
+  }
+
   // --- rendering ---
 
   // Everything arriving from the network comes through here: decrypt, then
@@ -479,13 +565,18 @@
   function upsert(item, text, { announce = true, pending = false } = {}) {
     if (rendered.has(item.id)) return; // duplicate delivery -- expected, ignore
 
-    // Our own paste, coming back to us. Retire the optimistic copy and stay
-    // quiet: the person who pasted it does not need it read out to them.
+    // Our own paste, coming back to us. Stay quiet: the person who pasted it
+    // does not need it read out to them.
     if (!pending) {
       const tempId = inflight.get(correlate(item));
       if (tempId !== undefined) {
         inflight.delete(correlate(item));
-        remove(tempId);
+        // Reuse the optimistic element rather than swapping it for an identical
+        // one. Nothing visible about the scrap changes here -- same text, same
+        // place -- only its identity, so destroying and re-inserting it would
+        // run an exit and an entry animation on every single send for no
+        // reason. Falls through to the normal path if it has since gone.
+        if (promote(tempId, item)) return;
         announce = false;
       }
     }
@@ -517,7 +608,7 @@
     }
     applyAge(el, item);
 
-    insertSorted(el);
+    reflow(() => insertSorted(el));
     rendered.set(item.id, { item, el, text });
     syncChrome();
 
@@ -548,15 +639,57 @@
     els.list.appendChild(el);
   }
 
-  function remove(id) {
+  // animate is false for the one removal that is not a removal: reconciling our
+  // own send used to swap the optimistic scrap for an identical one, and
+  // animating that plays an exit and an entry back to back on every paste. That
+  // path now calls promote() instead and never reaches here, but the option
+  // stays as the honest way to say "this is bookkeeping, not a deletion".
+  // Turns the optimistic scrap into the confirmed one in place. Everything the
+  // server decided that the client guessed at gets corrected -- the real ULID,
+  // the sort key that was pinned to the top with a '~', the rotation seeded
+  // from that ULID so this device tilts it the same way every other one does,
+  // and the age, which needs the server's timestamps.
+  //
+  // Returns false if the optimistic copy is gone -- thrown away mid-flight, or
+  // cleared -- and the caller renders it fresh instead.
+  function promote(tempId, item) {
+    const entry = rendered.get(tempId);
+    if (!entry) return false;
+
+    const { el, text } = entry;
+    rendered.delete(tempId);
+    el.dataset.id = item.id;
+    el.dataset.sort = item.id;
+    delete el.dataset.pending;
+    el.style.setProperty('--rotation', `${seededRotation(item.id)}deg`);
+    applyAge(el, item);
+    rendered.set(item.id, { item, el, text });
+
+    // Losing the '~' can move it, if something newer arrived while the POST was
+    // in flight. Usually a no-op, and the reflow makes it a slide when it isn't.
+    reflow(() => insertSorted(el));
+    syncChrome();
+    return true;
+  }
+
+  function remove(id, { animate = true } = {}) {
     const entry = rendered.get(id);
     if (!entry) return;
-    const wasFocused = entry.el.contains(document.activeElement) || document.activeElement === entry.el;
-    const next = entry.el.nextElementSibling || entry.el.previousElementSibling;
-    entry.el.remove();
+    const el = entry.el;
+    const wasFocused = el.contains(document.activeElement) || document.activeElement === el;
+    const next = el.nextElementSibling || el.previousElementSibling;
+
+    // Out of `rendered` first, so nothing can find it while it is fading.
     rendered.delete(id);
+
+    if (animate && !reduced.matches) {
+      animateOut(el);
+    } else {
+      reflow(() => el.remove());
+    }
+
     syncChrome();
-    if (wasFocused && next) focusScrap(next);
+    if (wasFocused && next && !next.dataset.leaving) focusScrap(next);
   }
 
   // Fresh -> Fading -> Dying, driven by how much of the TTL is left. The design
@@ -580,6 +713,7 @@
     const any = rendered.size > 0;
     els.empty.hidden = any;
     els.clear.hidden = !any;
+    els.keys.hidden = !any;
   }
 
   // --- actions ---
@@ -612,7 +746,11 @@
   }
 
   els.clear.addEventListener('click', async () => {
-    for (const id of [...rendered.keys()]) remove(id);
+    // One reflow around the whole sweep. Removing them one at a time would have
+    // each survivor slide up into a gap that is about to be a gap again.
+    reflow(() => {
+      for (const id of [...rendered.keys()]) remove(id);
+    });
     await fetch(`/api/rooms/${room}/items`, { method: 'DELETE' }).catch((err) =>
       console.error('clear failed', err)
     );
@@ -918,9 +1056,70 @@
     }
   });
 
+  // Document-level shortcuts. The list keys above all need focus to be in the
+  // list already, and the common case does not start there: a laptop that has
+  // just been handed something by a phone wants it on the clipboard, not a
+  // round of tabbing first.
+  //
+  // e.target can be the document, which has no closest -- the same trap the
+  // paste handler guards against, and with the same consequence if it is not
+  // guarded, since an exception here would kill every shortcut silently.
+  const isTyping = (node) => !!node?.closest?.('input, textarea, [contenteditable]');
+
+  // The newest scrap worth copying. Undecryptable ones are skipped rather than
+  // selected and refused: their Copy button is disabled for the same reason.
+  function newestCopyable() {
+    return [...els.list.children].find(
+      (el) => !el.dataset.leaving && !el.dataset.undecryptable
+    );
+  }
+
+  document.addEventListener('keydown', (e) => {
+    if (e.defaultPrevented || els.sheet.open) return;
+
+    // Ctrl/Cmd+K as well as '/', because it is the reflex in most things with a
+    // text box. '/' is the one to rely on: some browsers keep Ctrl+K for
+    // themselves and never let the page see it.
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+      e.preventDefault();
+      els.compose.focus();
+      return;
+    }
+
+    // Escape out of the compose field, so the bare keys below come back.
+    if (e.key === 'Escape' && e.target === els.compose) {
+      els.compose.blur();
+      return;
+    }
+
+    // Everything past here is an unmodified key, so it must not fire mid-word.
+    if (e.metaKey || e.ctrlKey || e.altKey || isTyping(e.target)) return;
+
+    switch (e.key) {
+      case '/':
+        e.preventDefault(); // or the '/' lands in the field it just focused
+        els.compose.focus();
+        break;
+
+      case 'c': {
+        // The focused scrap if there is one, otherwise the newest. Copying
+        // something other than what is visibly selected would be a surprise.
+        const focused = document.activeElement?.closest?.('[data-role="scrap"]');
+        const target = focused || newestCopyable();
+        if (target) {
+          e.preventDefault();
+          copyItem(target.dataset.id);
+        }
+        break;
+      }
+    }
+  });
+
   const observer = new MutationObserver(() => {
-    const first = els.list.firstElementChild;
-    if (first && ![...els.list.children].some((c) => c.tabIndex === 0)) first.tabIndex = 0;
+    // A scrap on its way out is still a child for the length of its fade, and
+    // handing it the tab stop would put focus on something about to vanish.
+    const live = [...els.list.children].filter((c) => !c.dataset.leaving);
+    if (live.length && !live.some((c) => c.tabIndex === 0)) live[0].tabIndex = 0;
   });
   observer.observe(els.list, { childList: true });
 

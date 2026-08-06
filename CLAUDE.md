@@ -523,6 +523,77 @@ not scroll, and then drops `overflow-y`, puts the button out of reach again.
 Rotation reuses `createRoom()`, so it inherits the jittered 429 backoff. Hammer
 the button and you hit the 10-rooms/hour cap like anything else.
 
+## The layout reflow, and why it is FLIP rather than View Transitions
+
+Position in flow is not a transitionable property, so before this a thrown
+scrap left every scrap below it teleporting up, and — much more often — a new
+scrap landing at the top made every existing one snap down. Arrivals are the
+common case; "the delete reflow" undersells what this is for.
+
+`reflow(mutate)` in `app.js` is a FLIP: measure every scrap, run the mutation,
+measure again, animate each one from where it was. Notes on it:
+
+- **It animates `translate` only.** `app.css` sets `rotate`, `translate` and
+  `scale` as individual properties rather than one `transform`, which is what
+  lets this compose with each scrap's seeded tilt instead of flattening it.
+- **Elements with no "before" are skipped.** They are new, and `@starting-style`
+  already drops them in.
+- **Nested calls run without their own FLIP** (`reflowing`). "Clear all" wraps
+  the whole sweep in one, so survivors do not slide up into a gap that is about
+  to be a gap again.
+- **`prefers-reduced-motion` is checked in JS.** The CSS block for it cannot
+  reach any of this: it neutralises CSS animations and transitions, and Web
+  Animations is a different pipeline.
+
+View Transitions was the guess in the M4 notes and is the wrong fit here: only
+one can run at a time, and stream items arrive whenever they like, so an
+arrival mid-delete would cut the delete short.
+
+### A leaving scrap is lifted out of flow
+
+`animateOut()` absolutely positions the scrap at the geometry it already
+occupied, *then* reflows. That order is the whole trick — the gap closes and the
+fade happens over it, at the same time, rather than one after the other.
+
+`.scrap-list { position: relative }` is load-bearing: without a positioned
+ancestor the leaving scrap is placed against the viewport and flies off to an
+unrelated corner. `web/layout_test.go` pins it, along with
+`pointer-events: none`, which stops a throw being aimed at something already
+gone.
+
+### Reconciling a send does not animate, because it is not a change
+
+`upsert` used to `remove(tempId)` and build a fresh element when our own paste
+came back from the server. With exits animating that is an exit and an entry on
+every single send, of one identical scrap for another.
+
+`promote()` reuses the element instead, correcting only what the client had
+guessed: the real ULID, the `~`-prefixed sort key that pinned it to the top, the
+rotation seeded from that ULID, and the age, which needs the server's
+timestamps. Nothing visible moves. It falls back to the old path if the
+optimistic copy has been thrown away mid-flight.
+
+## Keyboard: the list keys need focus, the document keys do not
+
+`els.list` already had arrows, Enter to copy and Backspace to throw, but all of
+them need focus to be in the list. The common case does not start there — a
+laptop that has just been handed something by a phone wants it on the clipboard
+without tabbing first.
+
+So `c` copies (the focused scrap if there is one, otherwise the newest
+decryptable one), and `/` or Ctrl/Cmd+K focuses the compose field. Escape
+leaves it.
+
+- **`/` is the one to rely on.** Ctrl+K is the reflex, but some browsers keep it
+  and never let the page see it.
+- **Bare keys are guarded** against modifiers, against `input`/`textarea`/
+  `contenteditable`, and against the pairing sheet being open. `isTyping` uses
+  `?.closest?.()` because `e.target` can be the document — the same trap the
+  paste handler documents, with the same consequence: one exception and every
+  shortcut dies silently.
+- The hint in `.scrap-foot` is hidden on phones with the paste hint, and toggled
+  by `syncChrome` so it does not advertise a shortcut for an empty list.
+
 ## Known gap: catch-up only adds
 
 `visibilitychange` fetches items newer than the newest one held, which is what
@@ -703,8 +774,8 @@ ciphertext, and the browser half is WebCrypto, which ships in the browser.
 
   Stack stayed vanilla. None of the Figma Make React/Tailwind/framer-motion code
   ships. Entry animation is `@starting-style` + transitions rather than springs.
-  Still outstanding from the design: framer-motion's `layout` reflow (items
-  sliding up when one above is deleted) — View Transitions would cover it.
+  framer-motion's `layout` reflow landed later as a hand-rolled FLIP — see "The
+  layout reflow, and why it is FLIP rather than View Transitions".
 
 ## Before it goes live
 
@@ -719,9 +790,10 @@ What is left is deployment and one physical check, not code.
    Long-lived SSE also outlives serverless execution limits. Use a container
    host that will hold one process: Fly.io (`min_machines_running = 1`, and turn
    autoscaling off), Render, Railway, or a VPS with Caddy in front.
-3. **Scan the QR with a real phone camera, once.** `qr.js` is verified
-   module-for-module against `go-qrcode` across all 20 versions, but no test
-   here has put a symbol in front of an actual camera. Do it before launch.
+~~3. **Scan the QR with a real phone camera, once.**~~ Done — in routine use
+   since v1 went up. `qr.js` was verified module-for-module against `go-qrcode`
+   across all 20 versions before that, but nothing had put a symbol in front of
+   an actual camera; now something has, repeatedly.
 4. **Decide what happens to `web/fonts/OFL-*.txt`** — they are embedded and
    served, which satisfies the OFL, but nothing links to them from the page.
 ~~5. **Add the app to an iPhone home screen, once.**~~ Done — it resumes the

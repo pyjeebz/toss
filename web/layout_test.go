@@ -62,6 +62,51 @@ func TestThePairingSheetCanScroll(t *testing.T) {
 	}
 }
 
+// A scrap on its way out is lifted out of flow so the gap closes while it
+// fades, which means it is absolutely positioned -- and an absolutely
+// positioned element with no positioned ancestor is placed against the
+// viewport. Drop `position: relative` here and a thrown scrap flies off to
+// some unrelated corner of the page on its way out.
+func TestTheScrapListIsAPositioningAnchor(t *testing.T) {
+	raw, err := fs.ReadFile(FS(), "app.css")
+	if err != nil {
+		t.Fatalf("app.css is not embedded: %v", err)
+	}
+	css := string(raw)
+
+	if list := rule(t, css, ".scrap-list"); !strings.Contains(list, "position: relative") {
+		t.Error(".scrap-list needs position: relative to anchor a leaving scrap")
+	}
+	leaving := rule(t, css, ".scrap[data-leaving]")
+	if !strings.Contains(leaving, "pointer-events: none") {
+		t.Error("a leaving scrap must not be clickable; it is already gone as far as the app is concerned")
+	}
+}
+
+// The keyboard hint is toggled with the rest of the chrome, so it needs the
+// data-role the JS looks for -- and it has to be hidden on phones alongside the
+// paste hint, since neither means anything without a keyboard.
+func TestTheKeyboardHintIsWiredAndMobileAware(t *testing.T) {
+	html, err := fs.ReadFile(FS(), "index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(html), `data-role="keys"`) {
+		t.Error(`no data-role="keys"; syncChrome has nothing to show or hide`)
+	}
+
+	css, err := fs.ReadFile(FS(), "app.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(css), ".scrap-keys") {
+		t.Error(".scrap-keys is unstyled")
+	}
+	if !strings.Contains(string(css), ".dropzone-hint,\n  .scrap-keys") {
+		t.Error("the keyboard hint is not hidden on phones with the paste hint")
+	}
+}
+
 // The note explaining what "start a new room" destroys has to follow the button
 // in the DOM: it is revealed by an adjacent sibling selector when the button
 // arms, and reordering them hides the warning exactly when it is needed.

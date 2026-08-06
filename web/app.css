@@ -374,10 +374,22 @@ body {
 
 /* ---------- scraps ---------- */
 
+/* position: relative is what a leaving scrap is positioned against. app.js
+   lifts it out of flow so the gap closes while it fades, and without an
+   anchor here it would be placed against the viewport instead. */
 .scrap-list {
+  position: relative;
   list-style: none;
   margin: 0;
   padding: 0;
+}
+
+/* On its way out: still painted, no longer participating. Above its neighbours
+   so the fade happens over them rather than under, and untouchable so a throw
+   cannot be aimed at something that has already gone. */
+.scrap[data-leaving] {
+  z-index: 1;
+  pointer-events: none;
 }
 
 .scrap {
@@ -675,8 +687,21 @@ body {
 
 .scrap-foot {
   display: flex;
+  align-items: center;
   justify-content: center;
+  gap: 1.5rem;
   margin: 3rem 0 0;
+}
+
+/* Quieter than the Clear button next to it: a shortcut nobody knows about is
+   not a feature, but it should not read as an instruction either. */
+.scrap-keys {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.875rem;
+  color: var(--pencil);
+  opacity: 0.7;
 }
 
 .scraps {
@@ -924,8 +949,10 @@ body {
     padding: 3rem 0.5rem;
   }
 
-  /* A physical keyboard is the exception on a phone; the gesture still works. */
-  .dropzone-hint {
+  /* A physical keyboard is the exception on a phone; the gesture still works,
+     and so does tapping a scrap to copy it. */
+  .dropzone-hint,
+  .scrap-keys {
     display: none;
   }
 
