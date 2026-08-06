@@ -234,6 +234,24 @@ Two things to know before editing those tests:
   subscriber receives.** Tests that read `sub.C()` expecting an item must go
   through the `nextContent` helper in `hub_test.go`, or they get a count where
   they expected content.
+
+`internal/api/sse_test.go` pins most of the above. Two things about it worth
+knowing before editing:
+
+- **The backlog in `TestNothingIsLostBetweenSubscribingAndReplaying` is padded
+  to 8 KB per item on purpose.** With small items the wrong ordering is only
+  wrong for a millisecond or two and passes 5 runs in 8. Padded, replaying the
+  backlog is slow enough that swapping the two lines fails 8 in 8. The scanner
+  in `openStream` has its buffer raised for the same reason — a padded item's
+  `data:` line is past `bufio.Scanner`'s 64 KB default.
+- **That test only asserts on the items published *during*.** Demanding the
+  backlog back would fail on `MaxItems` trimming rather than on ordering, and
+  counting arrivals rather than matching IDs passes trivially, because the
+  replayed backlog alone satisfies the count.
+
+It cannot be made deterministic, and that is a property of the design rather
+than the test: fan-out is non-blocking, so publishing fast enough to hit the
+window reliably would drop items in the *correct* implementation too.
 - The QR carries the pairing code (`&c=`) as well as the key. Without it a scan
   is **invisible to the server** — it is just a room URL — so the device
   holding the QR would never learn the scan worked. Being in the fragment, the
