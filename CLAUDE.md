@@ -471,6 +471,30 @@ the confirmation; it disarms itself after five seconds, because a button left
 reading "Throw it all away?" is a trap for the next person who opens the sheet.
 The sheet's `close` handler disarms it too.
 
+The warning text is hidden until the button arms, and **follows the button in
+the DOM** so `.action-reset[data-confirming] + .pair-reset-note` can reveal it.
+Reorder them and the warning stops appearing at the one moment it matters.
+
+### The sheet has to be able to scroll
+
+This shipped broken once and is worth knowing about. `.sheet` is
+`position: fixed`, so with `overflow: visible` anything past the viewport is not
+merely off screen — it is unreachable. No scrollbar, no gesture, nothing.
+
+The sheet holds a 12rem QR, the code, a countdown, the join form and the reset,
+which comes to within a few rem of a phone's usable height. Adding the reset
+section pushed the bottom off the end, and the button was invisible and
+unclickable while the markup, the handler and the deploy were all correct. The
+symptom was "the button does nothing", and every place you would look to debug
+that was fine.
+
+`.sheet` therefore carries `max-height`, `overflow-y: auto` and **padding**.
+The padding is load-bearing: scrolling one axis clips the other, and
+`.sheet-body::before` paints outside its box in both — the rough edge by a
+couple of px, the drop shadow by considerably more. Without room to land in,
+turning on scrolling slices the paper's torn edge off square.
+`web/layout_test.go` pins all four.
+
 Rotation reuses `createRoom()`, so it inherits the jittered 429 backoff. Hammer
 the button and you hit the 10-rooms/hour cap like anything else.
 

@@ -149,12 +149,17 @@
         undo. See "starting over" in app.js.
       -->
       <section class="pair-reset">
-        <h3 class="pair-reset-title">Start a new room</h3>
+        <button type="button" class="action action-reset" data-role="rotate">Start a new room</button>
+        <!--
+          Follows the button so CSS can reveal it with an adjacent sibling
+          selector when the button is armed, which is the moment it is worth
+          reading. Kept out of the collapsed state because the sheet is close to
+          a phone viewport's height already.
+        -->
         <p class="pair-reset-note">
           Empties this room and moves this device to a new one with a new key.
           Other devices stay behind and need pairing again.
         </p>
-        <button type="button" class="action action-reset" data-role="rotate">New room</button>
       </section>
     </div>
   </dialog>

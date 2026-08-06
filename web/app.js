@@ -863,7 +863,7 @@
     clearTimeout(rotateTimer);
     rotateTimer = null;
     delete els.rotate.dataset.confirming;
-    els.rotate.textContent = 'New room';
+    els.rotate.textContent = 'Start a new room';
   }
 
   // --- keyboard ---

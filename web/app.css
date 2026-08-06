@@ -183,8 +183,7 @@ body {
 .scrap-meta,
 .pair-or,
 .sheet-title,
-.pair-join-label,
-.pair-reset-title {
+.pair-join-label {
   font-family: var(--font-ui);
   font-size: 0.75rem;
   text-transform: uppercase;
@@ -686,16 +685,32 @@ body {
 
 /* ---------- pairing sheet ---------- */
 
+/*
+  The sheet scrolls when it has to, and that is not optional. It is
+  position: fixed, so anything past the viewport used to be simply unreachable
+  -- no scrollbar, no gesture, the bottom of the sheet just was not there. The
+  pairing sheet is within a few rem of a phone viewport's height with the QR,
+  the code, the join form and the reset in it, so it crosses the line on small
+  screens and in landscape.
+
+  The padding is what pays for the scroll: overflow on one axis makes the other
+  axis clip too, and .sheet-body::before paints outside its box in both -- the
+  rough edge by a couple of px, the drop shadow by rather more. Without room to
+  land in, turning on scrolling would slice the paper's edge off square.
+*/
 .sheet {
   position: fixed;
   inset: 0;
   margin: auto;
   width: calc(100% - 2rem);
   max-width: 24rem;
-  padding: 0;
+  max-height: 100vh;
+  max-height: 100dvh;
+  padding: 1.5rem 1rem;
   border: 0;
   background: transparent;
-  overflow: visible;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   color: var(--graphite);
 }
 
@@ -855,18 +870,19 @@ body {
   border-top: 1px solid rgb(110 113 120 / 0.15);
 }
 
-.pair-reset-title {
-  margin: 0 0 0.5rem;
-  color: var(--pencil);
-  font-weight: 600;
-}
-
+/* Shown only once the button is armed -- see the comment in index.html. The
+   sibling selector is why the note follows the button in the markup. */
 .pair-reset-note {
+  display: none;
   max-width: 18rem;
-  margin: 0 0 0.5rem;
+  margin: 0.5rem 0 0;
   font-size: 0.75rem;
   line-height: 1.6;
   color: var(--pencil);
+}
+
+.action-reset[data-confirming] + .pair-reset-note {
+  display: block;
 }
 
 .action-reset {
