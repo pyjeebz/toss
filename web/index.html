@@ -61,6 +61,12 @@
       <p class="status" data-role="status" data-state="connecting">
         <span class="status-dot" aria-hidden="true"></span>
         <span class="status-label" data-role="status-label">Connecting</span>
+        <!--
+          How many streams the room is holding. Hidden until one arrives, and
+          hidden again whenever the stream is not live -- a count next to
+          "Offline" states something we no longer know.
+        -->
+        <span class="status-peers" data-role="peers" hidden></span>
       </p>
       <button type="button" class="action action-pair" data-role="pair">Add device</button>
     </header>
@@ -135,6 +141,20 @@
           <button type="submit" class="action pair-join-submit">Join</button>
         </form>
         <p class="pair-join-error" data-role="pair-join-error" role="alert"></p>
+      </section>
+
+      <!--
+        The way out of a room whose link has been somewhere it should not have.
+        Takes two presses: it empties the room on the way out and there is no
+        undo. See "starting over" in app.js.
+      -->
+      <section class="pair-reset">
+        <h3 class="pair-reset-title">Start a new room</h3>
+        <p class="pair-reset-note">
+          Empties this room and moves this device to a new one with a new key.
+          Other devices stay behind and need pairing again.
+        </p>
+        <button type="button" class="action action-reset" data-role="rotate">New room</button>
       </section>
     </div>
   </dialog>

@@ -84,6 +84,8 @@ func (s *Server) stream(w http.ResponseWriter, r *http.Request) {
 				err = writeDeleted(w, ev.ID)
 			case hub.EventPaired:
 				err = writePaired(w, ev.Origin)
+			case hub.EventPresence:
+				err = writePresence(w, ev.Count)
 			}
 			if err != nil {
 				return
@@ -122,6 +124,26 @@ func writePaired(w http.ResponseWriter, origin string) error {
 		return err
 	}
 	_, err = fmt.Fprintf(w, "event: paired\ndata: %s\n\n", payload)
+	return err
+}
+
+// writePresence reports how many streams the room is currently holding, so a
+// device can tell whether anything is listening rather than inferring it from
+// silence.
+//
+// No `id:`, and never replayed, for the reason writePaired has none: it is
+// live state, and a count from an hour ago is worse than no count at all.
+//
+// This tells a room member nothing the server was not already holding on their
+// behalf -- it is the size of their own room, not anything about the content or
+// the people. It is streams rather than devices, strictly: two tabs on one
+// laptop count twice.
+func writePresence(w http.ResponseWriter, count int) error {
+	payload, err := json.Marshal(map[string]int{"count": count})
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(w, "event: presence\ndata: %s\n\n", payload)
 	return err
 }
 

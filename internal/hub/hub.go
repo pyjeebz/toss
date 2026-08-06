@@ -39,9 +39,10 @@ const (
 type EventKind string
 
 const (
-	EventItem    EventKind = "item"
-	EventDeleted EventKind = "deleted"
-	EventPaired  EventKind = "paired"
+	EventItem     EventKind = "item"
+	EventDeleted  EventKind = "deleted"
+	EventPaired   EventKind = "paired"
+	EventPresence EventKind = "presence"
 )
 
 // Event is one thing that happened in a room.
@@ -49,12 +50,13 @@ const (
 // The brief's subscriber carries a bare Item; it carries an Event instead so
 // that deletions can ride the same channel as arrivals without encoding "this
 // one is a tombstone" into the Item itself. Item is only meaningful for
-// EventItem, Origin only for EventPaired.
+// EventItem, Origin only for EventPaired, Count only for EventPresence.
 type Event struct {
 	Kind   EventKind
 	ID     string
 	Item   Item
 	Origin string
+	Count  int
 }
 
 type subscriber struct {
@@ -330,7 +332,12 @@ func (s *Subscription) C() <-chan Event { return s.sub.ch }
 // Close unsubscribes. Safe to call more than once.
 func (s *Subscription) Close() {
 	s.room.mu.Lock()
+	_, was := s.room.subs[s.sub]
 	delete(s.room.subs, s.sub)
+	if was {
+		// Under the lock, for the reason given in Subscribe.
+		s.room.broadcastLocked(Event{Kind: EventPresence, Count: len(s.room.subs)})
+	}
 	s.room.mu.Unlock()
 }
 
@@ -342,6 +349,17 @@ func (r *Room) Subscribe() *Subscription {
 	r.mu.Lock()
 	r.subs[s] = struct{}{}
 	r.lastSeen = time.Now()
+	// Announced from inside the lock, unlike every other broadcast. Taking the
+	// count and then fanning it out in two steps lets two devices subscribing at
+	// once interleave, and a subscriber that receives count=2 before count=1
+	// settles on the wrong number and stays there -- presence carries no ID and
+	// is never replayed, so nothing later corrects it. Serialising the count
+	// with its own delivery is what makes the last event the true one.
+	//
+	// Safe to send while holding the lock only because the send is
+	// non-blocking; see broadcastLocked. The new subscriber is already in the
+	// map, so it learns the count on connect without a separate first message.
+	r.broadcastLocked(Event{Kind: EventPresence, Count: len(r.subs)})
 	r.mu.Unlock()
 	return &Subscription{room: r, sub: s}
 }
@@ -356,6 +374,14 @@ func (r *Room) Subscribers() int {
 func (r *Room) broadcast(ev Event) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+	r.broadcastLocked(ev)
+}
+
+// broadcastLocked fans out with r.mu already held, either side. Every send is
+// non-blocking, so holding the lock across the loop cannot stall on a slow
+// consumer -- which is what makes it safe to call from inside the write-locked
+// sections of Subscribe and Close.
+func (r *Room) broadcastLocked(ev Event) {
 	for s := range r.subs {
 		select {
 		case s.ch <- ev:

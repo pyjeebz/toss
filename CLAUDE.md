@@ -217,6 +217,23 @@ Two things to know before editing those tests:
 - `paired` events carry no `id:` field either, for the same reason, and are
   never replayed. It is a live notification; telling a reconnecting client
   about a pairing from an hour ago would be a lie told with a stamp on it.
+- `presence` events carry no `id:` either, and are never replayed. Same
+  reasoning again: a count from an hour ago is worse than no count.
+- **The presence count is taken and broadcast under the same write lock**, via
+  `broadcastLocked`. It is the only broadcast in `hub.go` that does not happen
+  after the unlock, and the exception is load-bearing: take the count and send
+  it in two steps and two devices arriving at once can interleave — take 5,
+  take 6, send 6, send 5 — leaving a subscriber that already saw 6 sitting on
+  5 forever, because presence is never replayed and nothing later corrects it.
+  Sending under the lock is safe only because every send is non-blocking.
+  `TestPresenceCountsNeverGoBackwardsWhileDevicesArrive` asserts monotonicity
+  rather than the final value: checking only where the count ends up **passes
+  against the broken version**, because the last write usually does carry the
+  highest number. That was checked by mutation, not assumed.
+- **`Subscribe` emits a presence event, so it is the first thing a new
+  subscriber receives.** Tests that read `sub.C()` expecting an item must go
+  through the `nextContent` helper in `hub_test.go`, or they get a count where
+  they expected content.
 - The QR carries the pairing code (`&c=`) as well as the key. Without it a scan
   is **invisible to the server** — it is just a room URL — so the device
   holding the QR would never learn the scan worked. Being in the fragment, the
@@ -417,6 +434,46 @@ Figma Make file's `@import` for it was silently failing, so the design was
 previewed with `ui-monospace` all along. The fallback stack here matches what
 was actually on screen when the design was signed off.
 
+## The device count says streams, and means streams
+
+`presence` reports how many streams the room is holding. The UI says "2
+devices" because that is the question people are asking, but two tabs on one
+laptop count twice and there is no way to tell them apart — nor should there
+be, since that would mean identifying devices.
+
+It leaks nothing. The server was already holding this number, and it is the
+size of your own room: not the content, not who, not where. `internal/hub`
+still never reads content, and this did not change that.
+
+The count is hidden whenever the stream is not live, in `setStatus`. "2
+devices" next to "Offline" asserts something the client has stopped knowing.
+It returns on its own, because reconnecting re-subscribes and subscribing is
+what makes the server send a count.
+
+## Settled: rotating a room empties the old one
+
+"New room" in the pairing sheet is the only answer to *that link went somewhere
+it should not have*, and the README's threat model needs one — the key is in
+the URL, so a leaked URL is a leaked room, and before this there was no remedy
+short of clearing browser storage on every device by hand.
+
+**It clears the old room before leaving it.** Minting a new room on its own is
+not a remedy: the scraps in the old one stay readable at the old URL for up to
+24h, which is the entire reason someone is pressing the button.
+
+**It cannot evict the other devices, and the sheet says so before you press.**
+They hold the old key, and nothing distinguishes them from the person pressing
+the button — there are no accounts here, which is the point. They see the room
+empty out and the count fall, and they need pairing again.
+
+It takes two presses. There is no undo, and the label changing to a question is
+the confirmation; it disarms itself after five seconds, because a button left
+reading "Throw it all away?" is a trap for the next person who opens the sheet.
+The sheet's `close` handler disarms it too.
+
+Rotation reuses `createRoom()`, so it inherits the jittered 429 backoff. Hammer
+the button and you hit the 10-rooms/hour cap like anything else.
+
 ## Known gap: catch-up only adds
 
 `visibilitychange` fetches items newer than the newest one held, which is what
@@ -517,6 +574,8 @@ rather than as an error, and its Copy button is disabled.
 
 ```
 [data-role="paired"][data-show]         the PAIRED stamp, ~1.8s
+[data-role="peers"][data-count="N"]      streams on the room; hidden unless live
+[data-role="rotate"][data-confirming]    armed, waiting for the second press
 ```
 
 Both devices show it: the one that offered the code gets a `paired` event over

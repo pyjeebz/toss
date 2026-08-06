@@ -17,7 +17,9 @@ paste or type into it. On a phone the field is the way in, because touch
 browsers only offer "Paste" when a text field has focus. A paste sends straight
 away; typed text sends on Enter.
 
-**To receive:** tap a scrap to copy it back to your clipboard.
+**To receive:** tap a scrap to copy it back to your clipboard. The status line
+says how many devices are connected, so you can tell whether the other one is
+actually listening.
 
 **To add a device:** press **Add device** and scan the QR with the other
 device's camera, or type the 8-character code into the same sheet there. Both
@@ -63,6 +65,9 @@ Two ways a second device gets the key, neither of which hands it over:
 
 - **Anyone with your URL has your scraps.** The key is in the link. Sending
   someone the address bar contents, or a photo of the QR, gives them the room.
+  If that happens, **Add device → New room** empties the old room and moves you
+  to a fresh one with a new key. Your other devices stay behind and need pairing
+  again — they hold the old key, and nothing here can tell them apart from you.
 - **There is no recovery.** No accounts means nothing to reset. Clear your
   browser storage and lose the link, and the room is gone for good.
 - **A restart wipes everything.** Nothing is written to disk, deliberately.

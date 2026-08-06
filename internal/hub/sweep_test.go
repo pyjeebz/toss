@@ -39,13 +39,8 @@ func TestExpiredItemsAreBroadcast(t *testing.T) {
 
 	h.Sweep(now)
 
-	select {
-	case ev := <-sub.C():
-		if ev.Kind != EventDeleted || ev.ID != "01OLD" {
-			t.Fatalf("got %+v", ev)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("expiry was not announced to subscribers")
+	if ev := nextContent(t, sub); ev.Kind != EventDeleted || ev.ID != "01OLD" {
+		t.Fatalf("got %+v", ev)
 	}
 }
 

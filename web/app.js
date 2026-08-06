@@ -21,6 +21,8 @@
     clear: $('clear'),
     status: $('status'),
     statusLabel: $('status-label'),
+    peers: $('peers'),
+    rotate: $('rotate'),
     live: $('live'),
     template: $('scrap-template'),
     compose: $('compose'),
@@ -244,6 +246,24 @@
     source.addEventListener('item', (e) => accept(JSON.parse(e.data)));
     source.addEventListener('deleted', (e) => remove(JSON.parse(e.data).id));
     source.addEventListener('paired', (e) => showPaired(JSON.parse(e.data).origin));
+    source.addEventListener('presence', (e) => setPeers(JSON.parse(e.data).count));
+  }
+
+  // The count of streams the room is holding, which is the only way to answer
+  // "is my other device actually listening?" short of sending something and
+  // waiting to see if it lands.
+  //
+  // Streams rather than devices, strictly: two tabs on one laptop count twice.
+  // "Devices" is the word for what people are asking about, and every phrasing
+  // that is precise about it reads like a diagnostic.
+  //
+  // This is not new information reaching anyone. The server was already holding
+  // the count, and it is the size of your own room -- nothing about the content,
+  // and nothing about who.
+  function setPeers(count) {
+    els.peers.dataset.count = String(count);
+    els.peers.textContent = count > 1 ? `${count} devices` : 'Only this device';
+    els.peers.hidden = false;
   }
 
   // EventSource reconnects on its own and replays via Last-Event-ID, so the
@@ -615,7 +635,12 @@
 
   els.pair.addEventListener('click', openPairing);
   els.pairClose.addEventListener('click', () => els.sheet.close());
-  els.sheet.addEventListener('close', stopCountdown);
+  els.sheet.addEventListener('close', () => {
+    stopCountdown();
+    // Never leave a half-armed confirmation behind for the next time the sheet
+    // opens; the second press would land with no warning shown.
+    resetRotate();
+  });
 
   async function openPairing() {
     els.joinError.textContent = '';
@@ -778,6 +803,69 @@
     }
   });
 
+  // --- starting over ---
+
+  // The only answer to "that link went somewhere it should not have".
+  //
+  // Minting a new room on its own would not be one: the scraps in the old room
+  // stay readable at the old URL for up to 24h, and that is the entire reason
+  // anyone presses this. So the old room is emptied on the way out.
+  //
+  // What it cannot do is evict the other devices. They hold the old key, and
+  // nothing distinguishes them from the person pressing this -- there are no
+  // accounts here, which is the point. They see the room empty and the count
+  // fall, and they need pairing again. The sheet says so before the first press.
+  async function rotateRoom() {
+    const old = room;
+    try {
+      await fetch(`/api/rooms/${old}/items`, { method: 'DELETE' });
+    } catch (err) {
+      // Leaving is still worth doing if the clear failed, so this is not fatal.
+      console.error('could not empty the old room', err);
+    }
+
+    const id = await createRoom();
+    const k = await TossCrypto.exportKey(await TossCrypto.generateKey());
+    localStorage.setItem(STORAGE, JSON.stringify({ id, k }));
+    // A real navigation, for the same reason joining by code performs one: it
+    // rebuilds the stream, the list, the key and the room from nothing, with
+    // no state carried across from the room being abandoned.
+    location.assign(`/r/${id}#k=${k}`);
+  }
+
+  let rotateTimer = null;
+
+  els.rotate.addEventListener('click', async () => {
+    // Two presses. This throws away every scrap in the room and there is no
+    // undo, so the second press is the confirmation. It reverts on its own,
+    // because a button left reading "Throw it all away?" is a trap.
+    if (!els.rotate.dataset.confirming) {
+      els.rotate.dataset.confirming = 'true';
+      els.rotate.textContent = 'Throw it all away?';
+      rotateTimer = setTimeout(resetRotate, 5000);
+      return;
+    }
+
+    clearTimeout(rotateTimer);
+    els.rotate.disabled = true;
+    els.rotate.textContent = 'Starting a new room…';
+    try {
+      await rotateRoom();
+    } catch (err) {
+      console.error('could not start a new room', err);
+      els.rotate.disabled = false;
+      resetRotate();
+      els.joinError.textContent = 'Could not start a new room. Try again.';
+    }
+  });
+
+  function resetRotate() {
+    clearTimeout(rotateTimer);
+    rotateTimer = null;
+    delete els.rotate.dataset.confirming;
+    els.rotate.textContent = 'New room';
+  }
+
   // --- keyboard ---
 
   // Roving tabindex: one scrap in the tab order at a time, arrows move between
@@ -841,6 +929,11 @@
   function setStatus(state, label) {
     els.status.dataset.state = state;
     els.statusLabel.textContent = label;
+    // The count only means anything while the stream is up. Leaving "2 devices"
+    // on screen next to "Offline" asserts something we have stopped knowing.
+    // It comes back on its own: reconnecting re-subscribes, and subscribing is
+    // what makes the server send a count.
+    if (state !== 'live') els.peers.hidden = true;
   }
 
   boot();

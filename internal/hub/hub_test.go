@@ -24,13 +24,31 @@ func TestPublishReachesSubscribers(t *testing.T) {
 
 	room.Publish(item("01AAA"))
 
-	select {
-	case ev := <-sub.C():
-		if ev.Kind != EventItem || ev.ID != "01AAA" {
-			t.Fatalf("got %+v", ev)
+	if ev := nextContent(t, sub); ev.Kind != EventItem || ev.ID != "01AAA" {
+		t.Fatalf("got %+v", ev)
+	}
+}
+
+// nextContent returns the next event that says something happened to the room's
+// contents, skipping presence.
+//
+// Subscribing emits a presence event, and so does every device arriving or
+// leaving afterwards, so a test that reads the channel raw gets a count where
+// it expected an item. Tests that are actually about presence are below and do
+// not use this.
+func nextContent(t *testing.T, sub *Subscription) Event {
+	t.Helper()
+	for {
+		select {
+		case ev := <-sub.C():
+			if ev.Kind == EventPresence {
+				continue
+			}
+			return ev
+		case <-time.After(time.Second):
+			t.Fatal("no event")
+			return Event{}
 		}
-	case <-time.After(time.Second):
-		t.Fatal("no event")
 	}
 }
 
@@ -113,14 +131,14 @@ func TestDeleteAndClearBroadcast(t *testing.T) {
 	if room.Delete("01A") {
 		t.Fatal("second delete reported hit")
 	}
-	if ev := <-sub.C(); ev.Kind != EventDeleted || ev.ID != "01A" {
+	if ev := nextContent(t, sub); ev.Kind != EventDeleted || ev.ID != "01A" {
 		t.Fatalf("got %+v", ev)
 	}
 
 	if n := room.Clear(); n != 1 {
 		t.Fatalf("cleared %d, want 1", n)
 	}
-	if ev := <-sub.C(); ev.Kind != EventDeleted || ev.ID != "01B" {
+	if ev := nextContent(t, sub); ev.Kind != EventDeleted || ev.ID != "01B" {
 		t.Fatalf("got %+v", ev)
 	}
 	if len(room.Since("")) != 0 {
