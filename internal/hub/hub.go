@@ -223,6 +223,30 @@ func (r *Room) Since(since string) []Item {
 	return out
 }
 
+// IDs returns the ID of every unexpired item, oldest first.
+//
+// Separate from Since() rather than derived from it, because the caller only
+// wants to know what still exists and Since() copies the items to say so. A
+// full room is 50 items of up to 256 KB; this answer is fifty ULIDs.
+//
+// Expired items are filtered here for the same reason Since() filters them: the
+// sweeper runs once a minute and nothing should be reported alive in the gap.
+func (r *Room) IDs() []string {
+	now := time.Now()
+
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	out := make([]string, 0, len(r.items))
+	for _, it := range r.items {
+		if now.After(it.ExpiresAt) {
+			continue
+		}
+		out = append(out, it.ID)
+	}
+	return out
+}
+
 // StartSweeper collects expired items and idle rooms until ctx is cancelled.
 // Runs in its own goroutine; call it once, from main.
 func (h *Hub) StartSweeper(ctx context.Context, log *slog.Logger) {

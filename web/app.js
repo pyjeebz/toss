@@ -305,16 +305,58 @@
   async function catchUp() {
     if (!room) return;
     try {
-      const res = await fetch(`/api/rooms/${room}/items?since=${encodeURIComponent(newestID())}`);
+      // Taken once, before anything is asked for, and used twice: as the resume
+      // point, and as the boundary reconcile() is allowed to judge. Anything
+      // that lands while these requests are in flight is newer than this.
+      const mark = newestID();
+
+      const res = await fetch(`/api/rooms/${room}/items?since=${encodeURIComponent(mark)}`);
       if (!res.ok) return;
       const { items } = await res.json();
       await Promise.all(items.map((item) => accept(item, { announce: false })));
-      if (items.length) {
-        els.live.textContent = `${items.length} new item${items.length > 1 ? 's' : ''} while you were away`;
-      }
+
+      const gone = await reconcile(mark);
+
+      const parts = [];
+      if (items.length) parts.push(`${items.length} new item${items.length > 1 ? 's' : ''}`);
+      if (gone) parts.push(`${gone} thrown away elsewhere`);
+      if (parts.length) els.live.textContent = `${parts.join(', ')} while you were away`;
     } catch (err) {
       console.error('catch-up failed', err);
     }
+  }
+
+  // Catching up with `since` can only add, so a scrap thrown away on another
+  // device while this tab slept is still sitting there. Nothing will mention it
+  // again either: the deleted event went out while nobody was listening, and
+  // deleted events carry no id, so no reconnect replays them.
+  //
+  // Asking what the room still holds is the fix, and it is cheap because the
+  // answer is IDs. Refetching the room to learn that one item left could be
+  // 50 x 256 KB; fifty ULIDs is 1.4 KB.
+  //
+  // `mark` is what makes this safe to run against a live stream. An item that
+  // arrives after the request went out has a larger ULID than anything rendered
+  // when it did -- ULIDs are ordered by creation -- so the server's answer,
+  // taken before it existed, says nothing about it. Judging it anyway would
+  // throw away a scrap that had just arrived, which is the bug this is fixing,
+  // pointed the other way.
+  async function reconcile(mark) {
+    const res = await fetch(`/api/rooms/${room}/ids`);
+    if (!res.ok) return 0;
+    const { ids } = await res.json();
+    const live = new Set(ids);
+
+    let gone = 0;
+    for (const [id, { el }] of [...rendered]) {
+      if (el.dataset.pending) continue; // not on the server yet, by definition
+      if (!mark || id > mark) continue; // newer than the question that was asked
+      if (!live.has(id)) {
+        remove(id);
+        gone++;
+      }
+    }
+    return gone;
   }
 
   // Newest acknowledged item. Optimistic ones are skipped: their temp IDs are

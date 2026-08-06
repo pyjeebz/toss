@@ -97,6 +97,7 @@ func (s *Server) Routes(static fs.FS) http.Handler {
 	mux.HandleFunc("POST /api/rooms", s.limit(s.creates, s.createRoom))
 	mux.HandleFunc("POST /api/rooms/{room}/items", s.limit(s.writes, s.sendItem))
 	mux.HandleFunc("GET /api/rooms/{room}/items", s.listItems)
+	mux.HandleFunc("GET /api/rooms/{room}/ids", s.listIDs)
 	mux.HandleFunc("GET /api/rooms/{room}/stream", s.stream)
 	mux.HandleFunc("DELETE /api/rooms/{room}/items/{id}", s.limit(s.writes, s.deleteItem))
 	mux.HandleFunc("DELETE /api/rooms/{room}/items", s.limit(s.writes, s.clearItems))
@@ -236,6 +237,29 @@ func (s *Server) listItems(w http.ResponseWriter, r *http.Request) {
 	room.Touch()
 	items := room.Since(r.URL.Query().Get("since"))
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+// listIDs answers "what does this room still hold", for a tab that has been
+// asleep.
+//
+// Catching up with `since` can only ever add. A scrap thrown away on another
+// device while this tab was away is still on screen and nothing will mention it
+// again — the deleted event went out while nobody was listening, and deleted
+// events carry no id and are never replayed. This is how the client notices.
+//
+// IDs only, and that is the whole point of it existing. The alternative was
+// refetching the room, which is up to 50 items of 256 KB, to learn that one of
+// them left. Fifty ULIDs is about 1.4 KB.
+//
+// Not rate limited, like every other read: a phone waking up is the product
+// working.
+func (s *Server) listIDs(w http.ResponseWriter, r *http.Request) {
+	room := s.room(w, r)
+	if room == nil {
+		return
+	}
+	room.Touch()
+	writeJSON(w, http.StatusOK, map[string]any{"ids": room.IDs()})
 }
 
 func (s *Server) deleteItem(w http.ResponseWriter, r *http.Request) {

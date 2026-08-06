@@ -594,14 +594,37 @@ leaves it.
 - The hint in `.scrap-foot` is hidden on phones with the paste hint, and toggled
   by `syncChrome` so it does not advertise a shortcut for an empty list.
 
-## Known gap: catch-up only adds
+## Closed: catch-up now sees deletions too
 
-`visibilitychange` fetches items newer than the newest one held, which is what
-the brief specifies. It cannot see deletions that happened while the tab was
-away, so a scrap deleted elsewhere lingers until reload. Reconciling properly
-means either fetching every item (up to 50 × 256 KB — far too much for a phone
-waking on cellular) or a new IDs-only endpoint. Left alone deliberately; revisit
-only if it actually bites.
+This was a known gap for a long while, and the note here said reconciling
+properly meant either refetching every item — up to 50 × 256 KB, far too much
+for a phone waking on cellular — or a new IDs-only endpoint. The second was
+ruled out on the cost of the first. It should not have been: **fifty ULIDs is
+about 1.4 KB**, and a real room's answer measures at 68 bytes.
+
+`GET /api/rooms/{room}/ids` returns the IDs the room still holds.
+`reconcile()` in `app.js` runs it after every `catchUp()` and removes anything
+rendered that the server no longer has. Without it, a scrap thrown away on
+another device while this tab slept stayed on screen until reload — and nothing
+would ever have mentioned it, because the `deleted` event went out while nobody
+was listening and deleted events carry no `id`, so no reconnect replays them.
+
+Three things keep it from doing damage:
+
+- **`mark` is taken once, before anything is requested**, and used both as the
+  `since` resume point and as the boundary `reconcile` may judge. An item that
+  arrives while the requests are in flight has a larger ULID than anything
+  rendered when they went out — ULIDs are ordered by creation — so the server's
+  answer, taken before that item existed, says nothing about it. Judging it
+  anyway would throw away a scrap that had just arrived, which is this same bug
+  pointed the other way.
+- **Optimistic items are skipped.** They are not on the server yet by
+  definition, so every reconcile would delete the scrap you just pasted.
+- **`Room.IDs()` filters expired items**, exactly as `Since()` does. The sweeper
+  runs once a minute and nothing should be reported alive in the gap.
+
+`IDs()` is deliberately not derived from `Since()`: that copies the items to
+answer, which is the cost this exists to avoid.
 
 ## Layout
 
@@ -609,7 +632,7 @@ only if it actually bites.
 cmd/toss/main.go        server setup, graceful shutdown
 internal/hub/hub.go     rooms, subscribers, fan-out   (sweeper: M2)
 internal/hub/item.go    Item
-internal/api/routes.go  handlers, security headers, room page
+internal/api/routes.go  handlers, security headers, room page, static ETags
 internal/api/sse.go     stream handler
 internal/api/pair.go    short-code mint/claim/redeem
 internal/api/limit.go   per-IP token buckets
@@ -758,6 +781,8 @@ ciphertext, and the browser half is WebCrypto, which ships in the browser.
   stays a pure restyle.
 - ~~**M2**~~ — Sweeper, rate limits, catch-up on `visibilitychange` and
   `pageshow`, `retry:` hint on the stream, and recovery when a room is gone.
+  Catch-up later grew deletion reconciling; see "Closed: catch-up now sees
+  deletions too".
 - ~~**M3**~~ — E2EE. AES-GCM 256 via WebCrypto, fresh 96-bit IV per item, key
   in the URL fragment as `#k=<base64url>`. The QR needed nothing, exactly as
   planned — it already encoded `location.hash`.
@@ -799,5 +824,6 @@ What is left is deployment and one physical check, not code.
 ~~5. **Add the app to an iPhone home screen, once.**~~ Done — it resumes the
    room Safari was in. See "Settled: the manifest starts at `/`".
 
-Not blockers, and both deliberate: catch-up only adds and cannot see deletions
-made while a tab was away; the layout reflow on delete is still missing.
+Both of the deliberate gaps that used to be listed here are closed: catch-up
+reconciles deletions via the IDs endpoint, and the layout reflow landed as a
+hand-rolled FLIP.

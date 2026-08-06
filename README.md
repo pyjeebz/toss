@@ -26,7 +26,10 @@ device's camera, or type the 8-character code into the same sheet there. Both
 devices stamp PAIRED when it lands. The code lasts 5 minutes and works once.
 
 Scraps expire after 24 hours on their own. You can throw one away sooner, or
-clear the lot.
+clear the lot — and throwing one away on one device removes it from the others,
+including ones that were asleep at the time.
+
+On a keyboard, **C** copies the newest scrap and **/** jumps to the text field.
 
 **To keep it handy:** add it to your home screen — "Add to Home Screen" on
 iOS, "Install app" or "Add to Home screen" in Chrome's menu on Android. That
