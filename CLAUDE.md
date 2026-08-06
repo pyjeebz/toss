@@ -551,13 +551,39 @@ Script order in `index.html` is `qr.js`, `crypto.js`, `app.js`. All three are
 |---|---|---|
 | Item TTL | 24h | swept every 60s, filtered on read |
 | Items per room | 50 | oldest dropped first |
-| Max item size | 256 KB | `http.MaxBytesReader` |
+| Max item size | 256 KB body, **~192 KB plaintext** | `http.MaxBytesReader` |
 | Writes | 60/min per IP | sends, deletes, pairing |
 | Room creation | 10/hr per IP | |
 | Room sweep | untouched 48h | only with zero subscribers |
 | Pairing code | 5 min, one redemption | |
 
 `TOSS_TRUST_PROXY` to honour proxy headers, `TOSS_ADDR` to move off `:8080`.
+
+### The two size numbers are not the same number
+
+`maxItemBytes` caps the request body. Since M3 that body carries base64 of the
+ciphertext, not the text, so what a person can actually paste is smaller by the
+base64 expansion, the 16-byte GCM tag, the IV and the JSON envelope:
+
+```
+{"iv":"<16 chars>","content":"<ceil(4*(N+16)/3) chars>"}
+```
+
+38 characters of frame around the payload, which puts the real limit at
+**196563 bytes — about 192 KB**. It is bytes of UTF-8 rather than characters,
+so a message in a non-Latin script runs out at roughly a quarter of the
+character count.
+
+This was documented as a flat "256 KB" for a while, which is a third too high
+and makes "it just didn't send" the symptom of believing it.
+`web/size_test.go` pins both ends against a real server — the byte at the limit
+gets a 201, the next one a 413 — so the number in this table cannot drift away
+from the number the server enforces.
+
+The client handles the 413 (`app.js`, `data-failed="too-large"`) rather than
+pre-checking the size, and that is fine: the check would have to duplicate the
+base64 arithmetic in a second place to save one round trip on an input nobody
+sends by accident.
 
 ## Frontend rules
 

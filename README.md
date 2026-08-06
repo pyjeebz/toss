@@ -145,13 +145,18 @@ for i in $(seq 6); do curl -s https://<app>/healthz; echo; done
 |---|---|
 | Item lifetime | 24 hours |
 | Items per room | 50, oldest dropped first |
-| Max item size | 256 KB |
+| Max item size | ~192 KB of text (256 KB on the wire) |
 | Writes | 60/min per IP |
 | Room creation | 10/hour per IP |
 | Idle room sweep | 48 hours |
 
 Reads are never rate limited. A phone waking up and reconnecting all day is the
 product working correctly, not abuse.
+
+The size cap applies to the encrypted request, which is base64 and so about a
+third larger than your text — hence two numbers. It also counts bytes of UTF-8,
+not characters, so text that is not mostly ASCII runs out sooner. Anything over
+the line is refused outright and says so; nothing is silently truncated.
 
 ## Tests
 

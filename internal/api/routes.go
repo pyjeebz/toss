@@ -4,6 +4,8 @@ package api
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io/fs"
@@ -110,9 +112,64 @@ func (s *Server) Routes(static fs.FS) http.Handler {
 	// A more specific pattern wins, so this takes precedence over the static
 	// handler below.
 	mux.HandleFunc("GET /r/{room}", s.roomPage)
-	mux.Handle("GET /", http.FileServerFS(static))
+	mux.Handle("GET /", staticHandler(static))
 
 	return securityHeaders(mux)
+}
+
+// staticHandler serves the embedded frontend with cache validators on it.
+//
+// embed.FS reports a zero ModTime, so http.ServeContent emits no Last-Modified
+// and FileServerFS sets no ETag, which leaves every asset with nothing a
+// browser can revalidate against. The visible cost is that the JS, CSS, fonts
+// and icons are refetched in full on every single load -- the exact thing a
+// phone waking on cellular should not be doing.
+//
+// The invisible cost is worse. With no validators at all, caching falls to
+// browser heuristics, and a device can end up holding a new index.html against
+// an old app.js. For this app that means an old crypto.js against a changed
+// pairing contract: it decrypts nothing and reports success. That is the same
+// failure this project refuses a service worker to avoid, arrived at by
+// omission rather than by choice.
+//
+// Hashing once at startup is exact, because the contents are compiled in and
+// cannot change without a new binary. ServeContent reads the ETag off the
+// header set here and answers If-None-Match itself, so a repeat visit costs a
+// 304 and no body.
+func staticHandler(static fs.FS) http.Handler {
+	etags := make(map[string]string)
+	err := fs.WalkDir(static, ".", func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		b, err := fs.ReadFile(static, p)
+		if err != nil {
+			return err
+		}
+		sum := sha256.Sum256(b)
+		etags["/"+p] = `"` + base64.RawURLEncoding.EncodeToString(sum[:16]) + `"`
+		return nil
+	})
+	if err != nil {
+		panic("hashing the embedded frontend: " + err.Error())
+	}
+
+	files := http.FileServerFS(static)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p := r.URL.Path
+		if p == "/" {
+			p = "/index.html"
+		}
+		if tag, ok := etags[p]; ok {
+			w.Header().Set("ETag", tag)
+			// Revalidate every time rather than trusting an age. These URLs are
+			// not content-addressed -- /app.js is always /app.js -- so any
+			// max-age is a window in which a deployed fix sits behind a stale
+			// copy. A 304 is cheap. A wrong crypto.js is not.
+			w.Header().Set("Cache-Control", "no-cache")
+		}
+		files.ServeHTTP(w, r)
+	})
 }
 
 // --- handlers ---
@@ -239,6 +296,10 @@ func (s *Server) room(w http.ResponseWriter, r *http.Request) *hub.Room {
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	// Never cached, anywhere. These responses carry ciphertext and room state
+	// that changes under the client's feet, and a backfill answered from a
+	// browser cache is a tab quietly showing a room as it was.
+	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
 }
